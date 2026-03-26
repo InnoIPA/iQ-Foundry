@@ -6,12 +6,11 @@
 
 <h1 align="center"><em><strong>Simplify the Workflow, Accelerate Deployment.</strong></em></h1>
 
-<h3 align="center">This tool simplifies model quantization and deployment validation for edge AI. It is designed to reduce friction between model preparation, quality comparison, and real-device execution, making the deployment process easier to repeat and scale.</h3>
-
-
-`iQ-Foundry` is a deployment pipeline for preparing and validating computer vision models on Qualcomm Dragonwing platforms. It provides a single CLI to quantize and compile supported `.pt` models into quantized `.tflite` models through QAI Hub, compare FP vs quantized quality with mAP@0.5, and run inference on-device through ADB or directly on the target.
+<h3 align="center">This tool simplifies model quantization and validation for edge AI, reducing friction from preparation to real-device deployment—making workflows repeatable and scalable.</h3>
 
 ![Repository overview](docs/Images/readme_1.png)
+
+`iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible YOLO.ptmodels into.tflite artifacts, validating FP-versus-quantized quality with mAP@0.5, and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
 
 ## Requirements
 
@@ -50,6 +49,7 @@ Runtime behavior is split between host and target:
 | CLI model types | `yolov10`, `yolov11`, `yolov26` | Pass these values to `--type`. |
 | Modes | `qc`, `mAP`, `test` | All modes are exposed through `cli.py`. |
 | Devices | `EXMP-Q911 (Qualcomm QCS9075)` | Target platform supported by this workflow. |
+| Runtime | `tflite` | TensorFlow Lite runtime is supported. |
 
 ## Getting Started
 
