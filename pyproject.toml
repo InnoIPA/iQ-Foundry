@@ -1,0 +1,20 @@
+[tool.ruff]
+fix = true
+[tool.ruff.lint]
+select = [ # These rules are borrowed from Ruff websites and pydantic repo.
+    # "ALL",
+
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "C4",   # flake8-comprehensions
+    "C90",  # mccabe
+    "F",    # pyflakes
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "I",    # isort
+    "Q",    # flake8-quotes
+    "A"     # flake8-builtins
+]
+fixable = ["ALL"]
+# ignore = ["ANN"]

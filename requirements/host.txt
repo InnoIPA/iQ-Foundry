@@ -1,0 +1,19 @@
+# x86 host requirements for this repo.
+# Install with: pip install -r requirements/host.txt
+#
+# Mode-to-package mapping:
+# - qc (host): numpy, Pillow, torch, ultralytics, qai-hub
+# - mAP (host): qc packages + pycocotools + tensorflow; also requires system adb
+# - mAP (device part): numpy, tensorflow on IQ9 target (see requirements/target.txt)
+# - test --adb (host): numpy, tensorflow, opencv-python, PyYAML; also requires system adb
+# - test (IQ9 local): numpy, tensorflow, PyYAML, Pillow, system cv2 (see requirements/target.txt)
+
+numpy==1.26.4
+Pillow==11.3.0
+torch==2.4.1
+ultralytics==8.4.16
+qai-hub==0.46.0
+pycocotools==2.0.10
+tensorflow==2.19.0
+opencv-python==4.11.0.86
+PyYAML==6.0.3

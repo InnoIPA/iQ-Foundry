@@ -1,0 +1,17 @@
+# IQ9 target requirements for on-device runtime.
+# Install on device with: python3 -m pip install -r requirements/target.txt
+#
+# Mode-to-package mapping:
+# - mAP (device part): numpy, tensorflow
+# - test (IQ9 local): numpy, tensorflow, PyYAML, Pillow, system cv2
+# - qc and host-side mAP/test orchestration are x86-only (see requirements/host.txt)
+#
+# NOTE:
+# - cv2 is required by tool/inference.py but is system-provided on IQ9.
+# - Verified on device (2026-03-13): cv2.__version__ == 4.11.0
+# - Do not pip-install opencv on target via this file.
+
+numpy==1.26.4
+tensorflow==2.17.0
+PyYAML==6.0.3
+Pillow==12.1.0
