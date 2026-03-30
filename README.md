@@ -14,6 +14,8 @@
 
 ## Requirements
 
+> 💡 **Notice:** The software version requirements must strictly follow the versions specified in requirements.txt. Please refer to [requirements host](./requirements/host.txt) and [requirements taget](./requirements/target.txt).
+
 ### Host Requirements
 
 - Ubuntu 22.04
