@@ -2,7 +2,7 @@
 
 `mAP` mode compares an FP YOLO model against its compiled TFLite counterpart and reports the mAP@0.5 difference between the two. Use this mode to validate whether the compiled model preserves the expected detection quality before moving to device inference or broader testing.
 
-![mAP mode overview](Images/mAP_mode_1.png)
+![mAP mode overview](Images/map-mode-overview.png)
 
 ## Basic Command
 
@@ -18,9 +18,20 @@ python3 cli.py \
   --int-model /path/to/yolov26_compiled.tflite
 ```
 
+For saved-path usage, see [Configure Flow Commands](../README.md#configure-flow-commands) in the README.
+
 `--annotations` accepts either a COCO `.json` file or a directory of custom labels.
 For custom datasets, point `--annotations` at the label directory and `--images` at
 the matching image directory.
+
+For a smaller validation run, limit the number of images:
+
+```bash
+python3 cli.py \
+  --mode mAP \
+  --type yolov26 \
+  --max-images 5
+```
 
 ## Purpose
 
@@ -93,7 +104,7 @@ The FP output head is selected from `--type` unless you override it with `--fp-h
 | `yolov11` | `default` |
 | `yolov26` | `one2many` |
 
-If the compiled model was generated from a non-default branch configuration, change the FP branch to match it with `--fp-head`. This matters for `yolov10` and `yolov26`. `yolov11` always uses its default head and ignores `--fp-head`.
+For `yolov10` and `yolov26`, if the INT8 model was generated with `--qc-head one2one`, run `mAP` with `--fp-head one2one` so the FP branch matches the compiled model. `yolov11` always uses its default head and ignores `--fp-head`.
 
 ## Full mAP Flags
 
@@ -105,21 +116,21 @@ If the compiled model was generated from a non-default branch configuration, cha
 | `--int-model` | Path to the compiled `.tflite` model. | Required |
 | `--output_text` | Path for the text report. | `out/mAP_results/<type>/<type>_mAP_result_<timestamp>.txt` |
 | `--conf` | Pre-NMS confidence threshold used during postprocess for both the FP and compiled model paths. | `0.25` |
-| `--fp-head` | FP output branch override for `yolov10` and `yolov26`; `yolov11` always uses `default`. | `one2many` for `yolov10` and `yolov26`, `default` for `yolov11` |
+| `--fp-head` | FP output branch override for `yolov10` and `yolov26`; use `one2one` when the INT8 model was created with `--qc-head one2one`. `yolov11` always uses `default`. | `one2many` for `yolov10` and `yolov26`, `default` for `yolov11` |
 | `--nms` | NMS IoU threshold used during postprocess for both the FP and compiled model paths. | `0.7` |
 | `--max-det` | Maximum detections kept per image for both the FP and compiled model paths. | `300` |
 | `--max-images` | Number of images to evaluate across the entire run. | `300` |
-| `--adb-serial` | ADB device serial for the target device. | current default ADB target |
+| `--adb-serial` | ADB device serial for the target device. | first available device |
 | `--remote-workdir` | Remote working directory on the target. | `/data/local/tmp/yolo_map_eval` |
 | `--remote-runner-local` | Local path to the remote TFLite runner script. | `tool/remote_tflite_raw_runner.py` |
 | `--remote-runner-remote` | Target path where the remote runner is pushed. | `/data/local/tmp/yolo_map_eval/remote_tflite_raw_runner.py` |
 | `--qnn-lib` | QNN delegate library path on the target. | `/usr/lib/libQnnTFLiteDelegate.so` |
 | `--backend` | QNN backend type. | `htp` |
-| `--no-qnn` | Disable the QNN delegate and avoid using it for the compiled model path. | disabled by default |
+| `--no-qnn` | Disable the QNN delegate and avoid using it for the compiled model path. | off |
 
 ## Note
 
-It is recommended to start with the default settings. If the compiled model was produced from a non-default branch configuration, update `--fp-head` so the FP path matches the compiled model.
+It is recommended to start with the default settings. For `yolov10` and `yolov26`, if the INT8 model was produced with `--qc-head one2one`, update `--fp-head` to `one2one` so the FP path matches the compiled model.
 
 For custom datasets, if both `.txt` and `.xml` are present in the annotation
 directory, `.txt` takes precedence.
