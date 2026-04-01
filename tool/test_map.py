@@ -152,7 +152,9 @@ def parse_yolo_txt_annotations(
 
     annotations = []
     ann_id = start_ann_id
-    lines = [line.strip() for line in label_path.read_text().splitlines() if line.strip()]
+    lines = [
+        line.strip() for line in label_path.read_text().splitlines() if line.strip()
+    ]
     for line_no, line in enumerate(lines, start=1):
         parts = line.split()
         if len(parts) != 5:
@@ -163,7 +165,9 @@ def parse_yolo_txt_annotations(
             class_id = int(parts[0])
             cx, cy, bw, bh = (float(parts[i]) for i in range(1, 5))
         except ValueError as exc:
-            raise ValueError(f"Invalid YOLO annotation in {label_path}:{line_no}") from exc
+            raise ValueError(
+                f"Invalid YOLO annotation in {label_path}:{line_no}"
+            ) from exc
         if class_id < 0 or class_id >= len(class_names):
             raise ValueError(
                 f"YOLO class id {class_id} in {label_path}:{line_no} is out of range "
@@ -232,6 +236,88 @@ def parse_voc_xml_annotations(
         )
         ann_id += 1
     return annotations, ann_id
+
+
+def collect_yolo_txt_class_ids(annotations_dir: Path) -> set[int]:
+    class_ids: set[int] = set()
+    for label_path in sorted(annotations_dir.glob("*.txt")):
+        lines = [
+            line.strip() for line in label_path.read_text().splitlines() if line.strip()
+        ]
+        for line_no, line in enumerate(lines, start=1):
+            parts = line.split()
+            if len(parts) != 5:
+                raise ValueError(
+                    f"Expected 5 values in {label_path}:{line_no}, got {len(parts)}"
+                )
+            try:
+                class_id = int(parts[0])
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid YOLO annotation in {label_path}:{line_no}"
+                ) from exc
+            if class_id < 0:
+                raise ValueError(
+                    f"YOLO class id {class_id} in {label_path}:{line_no} must be >= 0"
+                )
+            class_ids.add(class_id)
+    return class_ids
+
+
+def collect_voc_xml_labels(annotations_dir: Path) -> set[str]:
+    labels: set[str] = set()
+    for xml_path in sorted(annotations_dir.glob("*.xml")):
+        tree = ET.parse(xml_path)
+        root = tree.getroot()
+        for obj in root.findall("object"):
+            label = obj.findtext("name")
+            if not label:
+                raise ValueError(f"Missing object name in {xml_path}")
+            labels.add(label)
+    return labels
+
+
+def validate_custom_annotation_class_compatibility(
+    annotations_dir: Path,
+    fp_model_path: Path,
+    format_name: str,
+) -> None:
+    class_names = load_fp_model_class_names(fp_model_path)
+    fp_class_count = len(class_names)
+
+    if format_name == "yolo_txt":
+        class_ids = collect_yolo_txt_class_ids(annotations_dir)
+        if not class_ids:
+            return
+        observed_min = min(class_ids)
+        observed_max = max(class_ids)
+        if observed_max >= fp_class_count:
+            raise RuntimeError(
+                "Custom annotation class mismatch: observed YOLO class ids span "
+                f"{observed_min}..{observed_max}, "
+                f"but FP model defines {fp_class_count} classes."
+            )
+        return
+
+    if format_name == "voc_xml":
+        labels = sorted(collect_voc_xml_labels(annotations_dir))
+        if not labels:
+            return
+        label_set = set(labels)
+        model_label_set = set(class_names)
+        if not label_set.issubset(model_label_set):
+            preview = ", ".join(labels[:5])
+            if len(labels) > 5:
+                preview += ", ..."
+            raise RuntimeError(
+                "Custom annotation class mismatch: observed VOC labels "
+                f"[{preview}] ({len(labels)} classes), "
+                f"but FP model defines classes {class_names[:5]}"
+                f"{'...' if fp_class_count > 5 else ''}."
+            )
+        return
+
+    raise ValueError(f"Unsupported custom annotation format: {format_name}")
 
 
 def normalize_custom_annotations_to_coco(
@@ -319,19 +405,32 @@ def resolve_annotations_for_map(
     xml_files = sorted(annotations_path.glob("*.xml"))
     if txt_files and xml_files:
         print(
-            f"[warn] found both YOLO .txt and VOC .xml annotations in {annotations_path}; "
+            "[warn] found both YOLO .txt and VOC .xml annotations in "
+            f"{annotations_path}; "
             "using .txt files and ignoring .xml"
+        )
+        validate_custom_annotation_class_compatibility(
+            annotations_path, fp_model_path, "voc_xml"
+        )
+        validate_custom_annotation_class_compatibility(
+            annotations_path, fp_model_path, "yolo_txt"
         )
         return normalize_custom_annotations_to_coco(
             annotations_path, images_dir, fp_model_path, "yolo_txt"
         )
     if txt_files:
         print(f"[info] detected YOLO .txt annotations in {annotations_path}")
+        validate_custom_annotation_class_compatibility(
+            annotations_path, fp_model_path, "yolo_txt"
+        )
         return normalize_custom_annotations_to_coco(
             annotations_path, images_dir, fp_model_path, "yolo_txt"
         )
     if xml_files:
         print(f"[info] detected VOC .xml annotations in {annotations_path}")
+        validate_custom_annotation_class_compatibility(
+            annotations_path, fp_model_path, "voc_xml"
+        )
         return normalize_custom_annotations_to_coco(
             annotations_path, images_dir, fp_model_path, "voc_xml"
         )
@@ -534,7 +633,9 @@ def _extract_box_layout(shape: tuple[int, ...]) -> tuple[int, int] | None:
     return None
 
 
-def _class_dim_for_anchor_count(shape: tuple[int, ...], anchor_count: int) -> int | None:
+def _class_dim_for_anchor_count(
+    shape: tuple[int, ...], anchor_count: int
+) -> int | None:
     if len(shape) != 3 or int(shape[0]) != 1:
         return None
     if int(shape[2]) == anchor_count:
@@ -574,7 +675,9 @@ def _extract_tflite_class_count(model_path: Path) -> int:
             f"Shapes={[tuple(int(v) for v in d['shape']) for d in output_details]}"
         )
 
-    anchor_count = _extract_box_layout(tuple(int(v) for v in box_candidates[0]["shape"]))[1]
+    anchor_count = _extract_box_layout(
+        tuple(int(v) for v in box_candidates[0]["shape"])
+    )[1]
     matching_cls = [
         cls_dim
         for detail, cls_dim in cls_candidates
@@ -1009,7 +1112,9 @@ def eval_map50(
 
     coco_gt = COCO(str(ann_path))
     preds = json.loads(pred_json.read_text())
-    coco_dt = coco_gt.loadRes(preds) if len(preds) else coco_gt.loadRes([])
+    if not preds:
+        return 0.0
+    coco_dt = coco_gt.loadRes(preds)
 
     ev = COCOeval(coco_gt, coco_dt, "bbox")
     ev.params.imgIds = list(image_ids)  # <-- critical fix
@@ -1390,6 +1495,9 @@ def run_fp_int_pair_map_eval(
         int_model_path=int_model_path,
         remote_runner_local_path=remote_runner_local_path,
     )
+    resolved_annotations = resolve_annotations_for_map(
+        ann_path, img_dir, fp_model_path
+    )
 
     local_target_requirements = str(
         Path(__file__).resolve().parent.parent / "requirements" / "target.txt"
@@ -1419,10 +1527,6 @@ def run_fp_int_pair_map_eval(
         adb_serial,
         str(remote_runner_local_path),
         remote_layout["remote_runner"],
-    )
-
-    resolved_annotations = resolve_annotations_for_map(
-        ann_path, img_dir, fp_model_path
     )
     try:
         eval_ann_path = resolved_annotations.eval_ann_path
@@ -1494,7 +1598,10 @@ def run_fp_int_pair_map_eval(
     finally:
         resolved_annotations.cleanup()
         try:
-            adb_shell(adb_serial, f"rm -rf {shlex.quote(remote_layout['remote_run_dir'])}")
+            adb_shell(
+                adb_serial,
+                f"rm -rf {shlex.quote(remote_layout['remote_run_dir'])}",
+            )
         except subprocess.CalledProcessError as cleanup_exc:
             print(f"[warn] remote cleanup failed: {cleanup_exc}")
 

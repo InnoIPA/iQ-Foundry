@@ -1,0 +1,56 @@
+{
+  "yolov10": {
+    "mAP": {
+      "annotations": "",
+      "fp_model": "",
+      "images": "",
+      "int_model": ""
+    },
+    "qc": {
+      "calib_dir": "",
+      "model": ""
+    },
+    "shared": {},
+    "test": {
+      "images": "",
+      "model": "",
+      "yaml": ""
+    }
+  },
+  "yolov11": {
+    "mAP": {
+      "annotations": "",
+      "fp_model": "",
+      "images": "",
+      "int_model": ""
+    },
+    "qc": {
+      "calib_dir": "",
+      "model": ""
+    },
+    "shared": {},
+    "test": {
+      "images": "",
+      "model": "",
+      "yaml": ""
+    }
+  },
+  "yolov26": {
+    "mAP": {
+      "annotations": "",
+      "fp_model": "",
+      "images": "",
+      "int_model": ""
+    },
+    "qc": {
+      "calib_dir": "",
+      "model": ""
+    },
+    "shared": {},
+    "test": {
+      "images": "",
+      "model": "",
+      "yaml": ""
+    }
+  }
+}

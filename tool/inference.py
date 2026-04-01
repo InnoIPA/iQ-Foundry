@@ -130,7 +130,8 @@ def _normalize_output_layout(
 ) -> np.ndarray:
     if tensor.ndim != 3 or int(tensor.shape[0]) != 1:
         raise RuntimeError(
-            f"Unexpected {tensor_name} tensor rank/shape: {tuple(int(x) for x in tensor.shape)}"
+            f"Unexpected {tensor_name} tensor rank/shape: "
+            f"{tuple(int(x) for x in tensor.shape)}"
         )
     if channel_sizes is not None:
         if int(tensor.shape[1]) in channel_sizes:
@@ -138,7 +139,8 @@ def _normalize_output_layout(
         if int(tensor.shape[2]) in channel_sizes:
             return np.transpose(tensor, (0, 2, 1))
         raise RuntimeError(
-            f"Unexpected {tensor_name} tensor shape: {tuple(int(x) for x in tensor.shape)}"
+            f"Unexpected {tensor_name} tensor shape: "
+            f"{tuple(int(x) for x in tensor.shape)}"
         )
     if anchor_count is not None:
         if int(tensor.shape[2]) == anchor_count:
@@ -146,7 +148,8 @@ def _normalize_output_layout(
         if int(tensor.shape[1]) == anchor_count:
             return np.transpose(tensor, (0, 2, 1))
         raise RuntimeError(
-            f"Unexpected {tensor_name} tensor shape: {tuple(int(x) for x in tensor.shape)}"
+            f"Unexpected {tensor_name} tensor shape: "
+            f"{tuple(int(x) for x in tensor.shape)}"
         )
     raise ValueError("Either channel_sizes or anchor_count must be provided.")
 
@@ -918,6 +921,18 @@ def validate_class_name_count_compatibility(model_path: str, yaml_path: str) -> 
         )
 
 
+def validate_test_model_inputs(
+    model_path: str, yaml_path: str, model_type: str | None = None
+) -> None:
+    if not os.path.isfile(model_path):
+        raise RuntimeError(f"Model not found: {model_path}")
+    if not os.path.isfile(yaml_path):
+        raise RuntimeError(f"YAML not found: {yaml_path}")
+    if model_type is not None:
+        validate_model_type_compatibility(model_path=model_path, model_type=model_type)
+    validate_class_name_count_compatibility(model_path=model_path, yaml_path=yaml_path)
+
+
 def _has_meaningful_outputs(output_dir: Path) -> bool:
     if not output_dir.is_dir():
         return False
@@ -966,9 +981,11 @@ def run_inference(
     _validate_inference_inputs(
         model_path=model_path, yaml_path=yaml_path, img_dir=img_dir
     )
-    if model_type is not None:
-        validate_model_type_compatibility(model_path=model_path, model_type=model_type)
-    validate_class_name_count_compatibility(model_path=model_path, yaml_path=yaml_path)
+    validate_test_model_inputs(
+        model_path=model_path,
+        yaml_path=yaml_path,
+        model_type=model_type,
+    )
     final_output_dir = Path(output_dir).expanduser().resolve()
     staging_tmp = tempfile.TemporaryDirectory(prefix="yolo_local_output_")
     staging_output_dir = Path(staging_tmp.name) / "output"
@@ -1130,7 +1147,11 @@ def run_test_inference_adb(
     except ModuleNotFoundError:
         from adb_runtime_bootstrap import ensure_adb_runtime_venv
 
-    validate_model_type_compatibility(model_path=model_path, model_type=model_type)
+    validate_test_model_inputs(
+        model_path=model_path,
+        yaml_path=yaml_path,
+        model_type=model_type,
+    )
     prepared_dir, tmp_obj = _prepare_image_input(
         image_dir=image_dir, image_path=image_path
     )
