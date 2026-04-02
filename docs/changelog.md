@@ -11,6 +11,9 @@
 - Added per-model QC defaults and override flags for quant scheme and output head selection.
 - Added persistent ADB runtime bootstrap and reuse for remote execution on EXMP-Q911 (Qualcomm QCS9075).
 - Added custom annotation directory support for `mAP`, including YOLO `.txt`, VOC `.xml`, and COCO `.json`.
+- Added configure flow commands to save required mode paths in `config.json` for simpler repeated runs.
+- Added direct run flow support for passing paths and advanced flags directly through the CLI.
+- Added improved CLI help output with quick-start guidance for configure flow and direct run usage.
 - Improved inference compatibility and evaluation behavior in `test` and `mAP` flows.
 - Improved YAML class-name validation and dynamic class handling.
 
@@ -21,3 +24,6 @@
 - Added documentation for custom annotation directory support in `mAP`.
 - Added USB-C connection and setup guidance for target-device usage.
 - Updated `mAP` documentation for custom dataset handling and evaluation behavior.
+- Updated the README with configure flow commands and direct run commands guidance.
+- Added Bring Your Own Model messaging and pretrained model guidance with an Ultralytics reference.
+- Added a changelog section link in the README.

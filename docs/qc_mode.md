@@ -2,7 +2,7 @@
 
 `qc` mode prepares a supported YOLO `.pt` model for deployment by converting it into a compiled `.tflite` artifact through QAI Hub. This is the model-preparation step used before model quality validation and device inference on EXMP-Q911 (Qualcomm QCS9075).
 
-![QC mode overview](Images/qc_mode_1.png)
+![QC mode overview](Images/qc-mode-overview.png)
 
 ## Basic Command
 
@@ -15,6 +15,8 @@ python3 cli.py \
   --model /path/to/yolov26n.pt \
   --calib_dir /path/to/calibration_images
 ```
+
+For saved-path usage, see [Configure Flow Commands](../README.md#configure-flow-commands) in the README.
 
 ## Required Inputs
 
@@ -37,37 +39,26 @@ Use `--output` to override the default location.
 
 ## How QC Mode Works
 
-The current `qc` pipeline works as follows:
+`qc` mode runs the following high-level flow:
 
 1. Validate that `--model` and `--calib_dir` were provided.
 2. Resolve the effective output head, quantization scheme, and output path for the selected model type.
-3. Load the selected YOLO model through Ultralytics.
-4. Wrap the model so export exposes only the raw output tensors needed by this pipeline.
-5. Trace the wrapped model with a fixed NHWC input shape of `1 x 640 x 640 x 3`.
-6. Submit the traced model to QAI Hub for ONNX compilation.
-7. Build calibration samples from the images in `--calib_dir`.
-8. Apply the configured quantization settings to the compiled model.
-9. Compile the resulting model to TFLite.
-10. Download the final `.tflite` artifact to the resolved output path.
+3. Compile and quantize the model through QAI Hub.
+4. Download the generated `.tflite` artifact to the resolved output path.
 
-In the current implementation, step 8 uses fully INT8 quantization with INT8 weights and INT8 activations, and step 9 keeps quantized I/O.
+## Flags, Defaults, and Options
 
-## Default Settings by Model
-
-| `--type` | Default compilation format | Default quant scheme | Default output head |
+| Flag | Purpose | Options | Default |
 | --- | --- | --- | --- |
-| `yolov10` | `w8a8 INT8` | `mse` | `one2many` |
-| `yolov11` | `w8a8 INT8` | `minmax` | `default` |
-| `yolov26` | `w8a8 INT8` | `mse` | `one2many` |
-
-## Available Configurations
-
-| Setting | Available choices | Default by model | CLI flag | Notes |
-| --- | --- | --- | --- | --- |
-| Quantization | `w8a8` | `yolov10=w8a8`, `yolov11=w8a8`, `yolov26=w8a8` | `not configurable` | The current implementation uses fully INT8 quantization. |
-| Quant scheme | `mse`, `minmax` | `yolov10=mse`, `yolov11=minmax`, `yolov26=mse` | `--qc-quant-scheme` |  |
-| Output head | `one2many`, `one2one` | `yolov10=one2many`, `yolov11=default`, `yolov26=one2many` | `--qc-head` | `yolov10` and `yolov26` support `one2many` and `one2one`. `yolov11` uses only the default head and ignores `--qc-head`. |
+| `--type` | Select the model family. | `yolov10`, `yolov11`, `yolov26` | Required |
+| `--mode qc` | Select QC mode. | `qc` | Required |
+| `--model` | Path to the FP `.pt` model. | filesystem path | Required |
+| `--calib_dir` | Path to the calibration image directory. | filesystem path | Required |
+| `--output` | Override the output model path. | filesystem path | `out/model/<type>/<type>_int8_<timestamp>.tflite` |
+| `--max_calib` | Maximum calibration images used for quantization. | integer | `200` |
+| `--qc-head` | Override the export head for supported models. | `one2many`, `one2one` | `one2many` for `yolov10` and `yolov26`; ignored for `yolov11`, which uses `default` |
+| `--qc-quant-scheme` | Override the quantization scheme. | `mse`, `minmax` | `mse` for `yolov10`, `minmax` for `yolov11`, `mse` for `yolov26` |
 
 ## Note
 
-It is recommended to use the default settings first. If the compiled model shows anomalies, try switching the quantization scheme.
+It is recommended to use the default settings first. If the compiled model shows anomalies, try switching the quantization scheme. The current implementation uses fully INT8 quantization.

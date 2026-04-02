@@ -56,7 +56,8 @@ def find_boxes_scores(output_details):
     ]
     if not matching_cls:
         raise RuntimeError(
-            "Expected class output [1,C,N] or [1,N,C] with the same anchor dimension as box output, "
+            "Expected class output [1,C,N] or [1,N,C] with the same anchor "
+            "dimension as box output, "
             f"got {[tuple(od['shape']) for od in output_details]}"
         )
     out_cls = sorted(
@@ -116,7 +117,8 @@ def main():
     if not input_files:
         raise RuntimeError(
             f"Input directory contains no .npy files: {input_dir}. "
-            "Host-side shared input generation selected zero images or adb push did not upload any inputs."
+            "Host-side shared input generation selected zero images or adb "
+            "push did not upload any inputs."
         )
 
     for in_file in input_files:

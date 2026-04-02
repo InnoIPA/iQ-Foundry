@@ -2,7 +2,7 @@
 
 `test` mode runs a compiled TFLite model on EXMP-Q911 (Qualcomm QCS9075) and writes visual and text outputs for quick inspection. Use this mode after model compilation and quality validation to confirm that detections look correct on real input images and that on-device behavior matches expectations.
 
-![Test mode overview](Images/test_mode.png)
+![Test mode overview](Images/test-mode-overview.png)
 
 ## Purpose
 
@@ -29,6 +29,8 @@ python3 cli.py \
   --images /path/to/test_images \
   --adb
 ```
+
+For saved-path usage, see [Configure Flow Commands](../README.md#configure-flow-commands) in the README.
 
 ## How Test Mode Works
 
@@ -70,7 +72,7 @@ In ADB mode, the tool:
 
 Use direct on-device mode when you are logged into EXMP-Q911 (Qualcomm QCS9075) and want to run the command locally on the target without `--adb`.
 
-This mode requires Step 3 of the setup process in [README.md](../README.md), because the target environment must already be prepared on EXMP-Q911 (Qualcomm QCS9075).
+This mode requires [Step 4 of the setup process in README.md](../README.md#step-4-target-setup-required-only-for-on-device-inference-without-adb), because the target environment must already be prepared on EXMP-Q911 (Qualcomm QCS9075).
 
 Sample command:
 
@@ -115,7 +117,7 @@ The output directory contains:
 - detection `.txt` files
 - `classes.txt`
 
-Use `--out` or `--output` to override the default location.
+Use `--output` to override the default location.
 
 ## Default Settings by Model
 
@@ -134,7 +136,7 @@ Use `--out` or `--output` to override the default location.
 | `--images` | Directory of input images. | filesystem path | Required unless `--image` is used |
 | `--image` | Single input image. | filesystem path | Required unless `--images` is used |
 | `--adb` | Run inference on EXMP-Q911 (Qualcomm QCS9075) through ADB from the host. | enabled or omitted | off |
-| `--out` / `--output` | Override the output directory. | filesystem path | `out/test/<type>/<type>_inference_<timestamp>/` |
+| `--output` | Override the output directory. | filesystem path | `out/test/<type>/<type>_inference_<timestamp>/` |
 | `--conf` | Confidence threshold used in postprocess. | float | model default |
 | `--nms` | NMS IoU threshold used in postprocess. | float | model default |
 | `--topk` | Number of candidates kept before NMS. | integer | model default |
@@ -142,8 +144,8 @@ Use `--out` or `--output` to override the default location.
 | `--postprocess-flow` | Override the postprocess flow. | `auto`, `default`, `o2o`, `o2m` | `auto` |
 | `--o2o-nms` | Enable class-wise NMS when using `o2o`. | enabled or omitted | off |
 | `--disable-int8-prefilter` | Disable the INT8 class prefilter in postprocess. | enabled or omitted | off |
-| `--adb-serial` | Select a specific ADB target device. | ADB serial string | current default ADB target |
-| `--remote-workdir` | Remote working directory used in ADB mode. | filesystem path on target | `/data/local/tmp/yolo_test` |
+| `--adb-serial` | Select a specific ADB target device. | ADB serial string | first available ADB target |
+| `--remote-workdir` | Remote working directory used in ADB mode. | filesystem path on target | `/data/local/tmp/yolo_map_eval` |
 | `--qnn-lib` | QNN delegate library path on EXMP-Q911 (Qualcomm QCS9075). | filesystem path on target | `/usr/lib/libQnnTFLiteDelegate.so` |
 | `--backend` | QNN backend type. | string | `htp` |
 | `--no-qnn` | Disable the QNN delegate. | enabled or omitted | off |
