@@ -1,5 +1,14 @@
 # Changelogs
 
+## v0.0.2
+
+### feat
+- 
+
+### docs
+- Added route to the iQ-Studio YOLO26 tutorial.
+- Updated the overview image with Bring Your Own Model messaging and clarified the supported input model type.
+
 ## v0.0.1
 
 ### feat

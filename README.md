@@ -16,6 +16,8 @@
 
 `iQ-Foundry` supports a Bring Your Own Model workflow. You can use your own compatible `yolov10`, `yolov11`, or `yolov26` `.pt` models with the pipeline. If you need pretrained YOLO weights, you can download official pretrained models from [Ultralytics](https://docs.ultralytics.com/).
 
+> **Note:** `iQ-Foundry` is focused on computer vision model conversion, optimization, and deployment. For broader workflows, additional features, and expanded setup options, see [iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main).
+
 ## Requirements
 
 > 💡 **Notice:** The software version requirements must strictly follow the versions specified in requirements.txt. Please refer to [requirements host](./requirements/host.txt) and [requirements target](./requirements/target.txt).
@@ -54,6 +56,7 @@ Runtime behavior is split between host and target:
 
 | Category | Supported Values | Notes |
 | --- | --- | --- |
+| Model input formats | `.pt` | PyTorch `.pt` models are supported as input to this workflow. |
 | CLI model types | `yolov10`, `yolov11`, `yolov26` | Pass these values to `--type`. |
 | Modes | `qc`, `mAP`, `test` | All modes are exposed through `cli.py`. |
 | Devices | `EXMP-Q911 (Qualcomm QCS9075)` | Target platform supported by this workflow. |
@@ -128,6 +131,7 @@ uv pip install -r requirements/target.txt
 `iQ-Foundry` supports two ways to run each mode:
 
 - [Configure Flow Commands](./README.md#configure-flow-commands): simple, basic commands for each mode. Save the required paths in `config.json`, then run the mode with minimal options.
+  For a simpler step-by-step walkthrough of configure flow, see the [iQ-Studio tutorial for YOLO26](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).
 - [Direct Run Commands](./README.md#direct-run-commands): full CLI usage with more supported flags. Pass the required paths and any extra options directly in the command.
 
 Use configure flow when you want an easier repeated workflow. Use direct run commands when you need more control over paths and flags for a specific run.
@@ -135,6 +139,8 @@ Use configure flow when you want an easier repeated workflow. Use direct run com
 ## Configure Flow Commands
 
 Configure flow lets you save the required paths in `config.json` and run each mode later with minimal options.
+
+If you want a simpler guided setup for configure flow, start with the [iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main) tutorial: [YOLO26 Configure Flow Tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).
 
 The examples below use `yolov26`. You can also use `--type yolov10` or `--type yolov11`.
 
