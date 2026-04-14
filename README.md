@@ -16,7 +16,7 @@
 
 `iQ-Foundry` supports a Bring Your Own Model workflow. You can use your own compatible `yolov10`, `yolov11`, or `yolov26` `.pt` models with the pipeline. If you need pretrained YOLO weights, you can download official pretrained models from [Ultralytics](https://docs.ultralytics.com/).
 
-> **Note:** `iQ-Foundry` is focused on computer vision model conversion, optimization, and deployment. For broader workflows, additional features, and expanded setup options, see [iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main).
+> **Note:** `iQ-Foundry` is focused on computer vision model conversion, optimization, and deployment. For more comprehensive deployment information related to hardware and applications, see [iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main).
 
 ## Requirements
 
