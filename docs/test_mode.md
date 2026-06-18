@@ -1,8 +1,19 @@
 # Test Mode
 
-`test` mode runs a compiled TFLite model on EXMP-Q911 (Qualcomm QCS9075) and writes visual and text outputs for quick inspection. Use this mode after model compilation and quality validation to confirm that detections look correct on real input images and that on-device behavior matches expectations.
+`test` mode runs a compiled TFLite model on EXMP-Q911 (Qualcomm QCS9075) and writes visual and
+text outputs for quick inspection. Use this mode after model compilation and quality validation to
+confirm that detections look correct on real input images and that on-device behavior matches
+expectations.
 
 ![Test mode overview](Images/test-mode-overview.png)
+
+> [!IMPORTANT]
+> Recommended host flow: run `./docker/iqf run test ... --adb` from your Ubuntu host or WSL
+> terminal. If you repeat this workflow, save the required host paths first with
+> `./docker/iqf configure test --type <type>`. Saved paths live in `.iqf/docker-paths.json`.
+
+> [!TIP]
+> For detailed mode help, run `./docker/iqf run test --help`.
 
 ## Purpose
 
@@ -15,14 +26,12 @@ It is used to:
 - inspect annotated outputs and detection text files
 - confirm practical on-device behavior after `qc` and, if needed, after `mAP`
 
-
 ## Basic Command
 
 Use the command below as the starting point for `yolov26` from the host through ADB:
 
 ```bash
-python3 cli.py \
-  --mode test \
+./docker/iqf run test \
   --type yolov26 \
   --model /path/to/yolov26_compiled.tflite \
   --yaml /path/to/coco.yaml \
@@ -30,7 +39,8 @@ python3 cli.py \
   --adb
 ```
 
-For saved-path usage, see [Configure Flow Commands](../README.md#configure-flow-commands) in the README.
+For host setup, start from [README.md](../README.md) and choose either
+[Ubuntu_host.md](../Ubuntu_host.md) or [Windows_host.md](../Windows_host.md).
 
 ## How Test Mode Works
 
@@ -47,13 +57,13 @@ The current `test` pipeline works as follows:
 
 ### ADB Mode
 
-Use ADB mode when you are running the command from the x86 host and want the tool to push files, execute inference on EXMP-Q911 (Qualcomm QCS9075), and pull the results back automatically.
+Use ADB mode when you are running the command from the host and want the tool to push files,
+execute inference on EXMP-Q911 (Qualcomm QCS9075), and pull the results back automatically.
 
 Sample command:
 
 ```bash
-python3 cli.py \
-  --mode test \
+./docker/iqf run test \
   --type yolov26 \
   --model /path/to/yolov26_compiled.tflite \
   --yaml /path/to/coco.yaml \
@@ -70,9 +80,30 @@ In ADB mode, the tool:
 
 ### Direct On-Device Mode
 
-Use direct on-device mode when you are logged into EXMP-Q911 (Qualcomm QCS9075) and want to run the command locally on the target without `--adb`.
+Use direct on-device mode when you are logged into EXMP-Q911 (Qualcomm QCS9075) and want to run
+the command locally on the target without `--adb`.
 
-This mode requires [Step 4 of the setup process in README.md](../README.md#step-4-target-setup-required-only-for-on-device-inference-without-adb), because the target environment must already be prepared on EXMP-Q911 (Qualcomm QCS9075).
+This is the remaining primary workflow that still uses `cli.py` directly.
+
+#### Prerequisites
+
+- copy or clone this repository onto EXMP-Q911
+- install [uv](https://docs.astral.sh/uv/) on the target if it is not already available
+- install the target dependencies from `requirements/target.txt`
+
+#### Target Setup
+
+```bash
+git clone https://github.com/InnoIPA/iQ-Foundry.git
+cd iQ-Foundry
+```
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv --system-site-packages .venv
+source .venv/bin/activate
+uv pip install -r requirements/target.txt
+```
 
 Sample command:
 
@@ -95,13 +126,16 @@ In direct on-device mode:
 
 `test` requires the following:
 
-- `--mode test`
+- the wrapper subcommand `./docker/iqf run test`
 - `--type` with one of `yolov10`, `yolov11`, or `yolov26`
 - `--model` pointing to the compiled `.tflite` model
 - `--yaml` pointing to the class-name YAML file
 - exactly one of:
   - `--images`
   - `--image`
+
+When you use the wrapper, pass the path flags directly or save them first through
+`./docker/iqf configure test --type <type>`.
 
 ## Output
 
@@ -154,5 +188,6 @@ Use `--output` to override the default location.
 
 - `yolov11` supports only the default postprocess flow. If `o2o` or `o2m` is requested, the current implementation ignores it and uses `default`.
 - `--o2o-nms` is meaningful only when the active flow is `o2o`.
-- When running without `--adb`, the command must be executed on EXMP-Q911 (Qualcomm QCS9075) directly.
+- Host-side `test` uses containerized ADB through `./docker/iqf`.
+- Direct on-device `test` runs on EXMP-Q911 itself and continues to use `cli.py`.
 - It is recommended to start with the default settings and only change postprocess flags when debugging unexpected detection behavior.
