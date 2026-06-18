@@ -14,22 +14,17 @@
 # limitations under the License.
 import argparse
 import json
+import os
 import platform
 import sys
 import time
-from copy import deepcopy
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
-
-from tool.test_map import run_fp_int_pair_map_eval
-from yolo_models.yolov10 import YOLOV10_TEST_DEFAULTS, YoloV10Pipeline
-from yolo_models.yolov11 import YOLOV11_TEST_DEFAULTS, YoloV11Pipeline
-from yolo_models.yolov26 import YOLOV26_TEST_DEFAULTS, YoloV26Pipeline
 
 DEFAULT_REMOTE_RUNNER_LOCAL = str(
     Path(__file__).resolve().parent / "tool" / "remote_tflite_raw_runner.py"
 )
-CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 DEFAULT_MAP_RESULTS_DIR = Path(__file__).resolve().parent / "out" / "mAP_results"
 DEFAULT_QC_RESULTS_DIR = Path(__file__).resolve().parent / "out" / "model"
 DEFAULT_TEST_RESULTS_DIR = Path(__file__).resolve().parent / "out" / "test"
@@ -44,18 +39,7 @@ ANSI_RESET = "\033[0m"
 WARNING_HOLD_SECONDS = 1.2
 NOTICE_HOLD_SECONDS = 3.0
 
-
-PIPELINES = {
-    "yolov10": YoloV10Pipeline,
-    "yolov11": YoloV11Pipeline,
-    "yolov26": YoloV26Pipeline,
-}
-
-TEST_DEFAULTS = {
-    "yolov10": YOLOV10_TEST_DEFAULTS,
-    "yolov11": YOLOV11_TEST_DEFAULTS,
-    "yolov26": YOLOV26_TEST_DEFAULTS,
-}
+MODEL_TYPES = ("yolov10", "yolov11", "yolov26")
 
 MODE_REQUIRED_FIELDS = {
     "qc": ("model", "calib_dir"),
@@ -63,65 +47,57 @@ MODE_REQUIRED_FIELDS = {
     "test": ("model", "yaml", "images"),
 }
 
-CONFIG_TEMPLATE = {
-    model_type: {
-        "qc": {"calib_dir": "", "model": ""},
-        "mAP": {
-            "annotations": "",
-            "fp_model": "",
-            "images": "",
-            "int_model": "",
-        },
-        "shared": {},
-        "test": {"images": "", "model": "", "yaml": ""},
-    }
-    for model_type in PIPELINES
-}
-
-CONFIG_PROMPTS = {
-    "qc": (
-        ("model", "Enter FP model path for qc (--model)"),
-        ("calib_dir", "Enter calibration image directory for qc (--calib_dir)"),
-    ),
-    "mAP": (
-        ("annotations", "Enter annotations path for mAP (--annotations)"),
-        ("fp_model", "Enter FP model path for mAP (--fp-model)"),
-        ("images", "Enter image directory for mAP (--images)"),
-        ("int_model", "Enter INT model path for mAP (--int-model)"),
-    ),
-    "test": (
-        ("model", "Enter INT model path for test (--model)"),
-        ("yaml", "Enter class YAML path for test (--yaml)"),
-        ("images", "Enter image directory for test (--images)"),
-    ),
-}
-
-CONFIG_PATH_RULES = {
+MODE_REQUIRED_FLAGS = {
     "qc": {
-        "model": "file",
-        "calib_dir": "dir",
+        "model": "--model",
+        "calib_dir": "--calib_dir",
     },
     "mAP": {
-        "annotations": "file_or_dir",
-        "fp_model": "file",
-        "images": "dir",
-        "int_model": "file",
-    },
-    "test": {
-        "model": "file",
-        "yaml": "file",
-        "images": "dir",
+        "annotations": "--annotations",
+        "fp_model": "--fp-model",
+        "images": "--images",
+        "int_model": "--int-model",
     },
 }
+
+
+@lru_cache(maxsize=1)
+def _load_model_registry():
+    from yolo_models.yolov10 import YOLOV10_TEST_DEFAULTS, YoloV10Pipeline
+    from yolo_models.yolov11 import YOLOV11_TEST_DEFAULTS, YoloV11Pipeline
+    from yolo_models.yolov26 import YOLOV26_TEST_DEFAULTS, YoloV26Pipeline
+
+    pipelines = {
+        "yolov10": YoloV10Pipeline,
+        "yolov11": YoloV11Pipeline,
+        "yolov26": YoloV26Pipeline,
+    }
+    test_defaults = {
+        "yolov10": YOLOV10_TEST_DEFAULTS,
+        "yolov11": YOLOV11_TEST_DEFAULTS,
+        "yolov26": YOLOV26_TEST_DEFAULTS,
+    }
+    return pipelines, test_defaults
 
 
 def get_pipeline(model_type: str):
-    if model_type not in PIPELINES:
+    pipelines, _ = _load_model_registry()
+    if model_type not in pipelines:
         raise SystemExit(
             f"[error] Unsupported --type {model_type}. "
-            f"Use one of: {list(PIPELINES.keys())}"
+            f"Use one of: {list(MODEL_TYPES)}"
         )
-    return PIPELINES[model_type]()
+    return pipelines[model_type]()
+
+
+def get_test_defaults(model_type: str) -> dict:
+    _, test_defaults = _load_model_registry()
+    if model_type not in test_defaults:
+        raise SystemExit(
+            f"[error] Unsupported --type {model_type}. "
+            f"Use one of: {list(MODEL_TYPES)}"
+        )
+    return test_defaults[model_type]
 
 
 def show_warning(message: str, hold_seconds: float = WARNING_HOLD_SECONDS) -> None:
@@ -152,6 +128,50 @@ def print_info(message: str) -> None:
     print(color_text(message, ANSI_CYAN))
 
 
+def _strip_trailing_slash(path_value: str) -> str:
+    stripped = path_value.rstrip("/")
+    return stripped or "/"
+
+
+def _load_output_display_map() -> dict[str, str]:
+    raw_value = os.environ.get("IQF_OUTPUT_DISPLAY_MAP")
+    if not raw_value:
+        return {}
+
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(parsed, dict):
+        return {}
+
+    return {
+        key: value
+        for key, value in parsed.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def resolve_output_display_path(path_value: str) -> str:
+    explicit_overrides = _load_output_display_map()
+    if path_value in explicit_overrides:
+        return explicit_overrides[path_value]
+
+    host_repo_root = os.environ.get("IQF_HOST_REPO_ROOT")
+    container_repo_root = os.environ.get("IQF_CONTAINER_REPO_ROOT")
+    if not host_repo_root or not container_repo_root:
+        return path_value
+
+    normalized_host_root = _strip_trailing_slash(host_repo_root)
+    normalized_container_root = _strip_trailing_slash(container_repo_root)
+    container_out_root = f"{normalized_container_root}/out"
+    if path_value == container_out_root or path_value.startswith(container_out_root + "/"):
+        suffix = path_value[len(container_out_root) :]
+        return f"{normalized_host_root}/out{suffix}"
+    return path_value
+
+
 def print_boxed_summary(
     lines: list[str],
     color: str = ANSI_GREEN,
@@ -165,10 +185,6 @@ def print_boxed_summary(
         line_color = ANSI_WHITE if idx in white_line_indices else color
         print(color_text(f"| {line.ljust(width)} |", line_color))
     print(color_text(border, color))
-
-
-def input_prompt(message: str) -> str:
-    return input(f"{ANSI_YELLOW}{message}{ANSI_RESET}")
 
 
 def print_help_title(title: str, subtitle: str | None = None) -> None:
@@ -224,14 +240,98 @@ def print_help_args(
             print(color_text(f"    {note}", note_color))
 
 
+def _wrapper_help_style_enabled() -> bool:
+    return os.environ.get("IQF_HELP_COMMAND_STYLE") == "wrapper"
+
+
+def _help_usage_command() -> str:
+    if _wrapper_help_style_enabled():
+        return (
+            "./docker/iqf run {qc,mAP,test} --type {yolov10,yolov11,yolov26} "
+            "[known path flags] [backend options]"
+        )
+    return (
+        "python3 cli.py --type {yolov10,yolov11,yolov26} "
+        "--mode {qc,mAP,test} [options]"
+    )
+
+
+def _help_qc_command() -> str:
+    if _wrapper_help_style_enabled():
+        return (
+            "./docker/iqf run qc --type yolov26 --model model.pt "
+            "--calib_dir calib/"
+        )
+    return (
+        "python3 cli.py --type yolov26 --mode qc --model model.pt "
+        "--calib_dir calib/"
+    )
+
+
+def _help_map_command() -> str:
+    if _wrapper_help_style_enabled():
+        return (
+            "./docker/iqf run mAP --type yolov26 --images val/ "
+            "--annotations ann.json --fp-model ref.pt "
+            "--int-model compiled.tflite"
+        )
+    return (
+        "python3 cli.py --type yolov26 --mode mAP --images val/ "
+        "--annotations ann.json --fp-model ref.pt "
+        "--int-model compiled.tflite"
+    )
+
+
+def _help_test_image_command() -> str:
+    if _wrapper_help_style_enabled():
+        return (
+            "./docker/iqf run test --type yolov26 --model model.tflite "
+            "--image test.jpg --yaml coco.yaml"
+        )
+    return (
+        "python3 cli.py --type yolov26 --mode test --model "
+        "model.tflite --image test.jpg --yaml coco.yaml"
+    )
+
+
+def _help_test_images_command() -> str:
+    if _wrapper_help_style_enabled():
+        return (
+            "./docker/iqf run test --type yolov26 --model model.tflite "
+            "--images images/ --yaml coco.yaml"
+        )
+    return (
+        "python3 cli.py --type yolov26 --mode test --model "
+        "model.tflite --images images/ --yaml coco.yaml"
+    )
+
+
+def _help_mode_details_command(mode_name: str) -> str:
+    if _wrapper_help_style_enabled():
+        return f"./docker/iqf run {mode_name} --help"
+    return f"python3 cli.py --mode {mode_name} --help"
+
+
+def _mode_required_argument_row(mode_name: str) -> tuple[str, str, str | None] | None:
+    if _wrapper_help_style_enabled():
+        return None
+    return (f"--mode {mode_name}", f"Select {mode_name} mode", "Required")
+
+
 def _extract_help_mode(argv: list[str]) -> str | None:
-    for option in ("--mode", "--configure"):
-        for idx, arg in enumerate(argv):
-            if arg == option and idx + 1 < len(argv):
-                return argv[idx + 1]
-            if arg.startswith(f"{option}="):
-                return arg.split("=", 1)[1]
+    for idx, arg in enumerate(argv):
+        if arg == "--mode" and idx + 1 < len(argv):
+            return argv[idx + 1]
+        if arg.startswith("--mode="):
+            return arg.split("=", 1)[1]
     return None
+
+
+def _contains_option(argv: list[str], option: str) -> bool:
+    for arg in argv:
+        if arg == option or arg.startswith(f"{option}="):
+            return True
+    return False
 
 
 def _help_requested(argv: list[str]) -> bool:
@@ -260,8 +360,8 @@ def render_main_help() -> None:
     print_help_title(
         "iQ-Foundry - Simplify the Workflow, Accelerate Deployment.",
         (
-            "Use configure flow to save paths first, or run directly with "
-            "paths in one command."
+            "Direct backend usage for environments where the input paths are "
+            "already valid locally or inside the container."
         ),
     )
 
@@ -269,27 +369,17 @@ def render_main_help() -> None:
     print_help_command_pairs(
         [
             (
-                "python3 cli.py --type {yolov10,yolov11,yolov26} "
-                "--configure {qc,mAP,test}",
-                "Save the required paths for a mode into config.json",
-            ),
-            (
-                "python3 cli.py --type {yolov10,yolov11,yolov26} "
-                "--mode {qc,mAP,test} [options]",
-                "Run a mode with saved paths or with paths passed directly",
+                _help_usage_command(),
+                "Run a mode with explicit paths",
             ),
         ]
     )
 
-    print_help_section("Two Ways To Use iQ-Foundry")
+    print_help_section("Recommended Flow")
     print_help_lines(
         [
-            "  Configure flow",
-            "    First save the required paths for a mode, then run that mode "
-            "using the saved paths",
-            "  Direct run",
-            "    Pass the required paths directly in one command without "
-            "saving them first",
+            "  For Docker-based interactive setup, use ./docker/iqf configure",
+            "  and ./docker/iqf run. This backend does not save or translate paths.",
         ]
     )
 
@@ -303,40 +393,18 @@ def render_main_help() -> None:
     )
 
     print_help_section("Quick Start")
-    print_help_lines(
-        [
-            "  Configure flow",
-        ]
-    )
     print_help_command_pairs(
         [
             (
-                "python3 cli.py --type yolov26 --configure qc",
-                "Save the required qc paths first",
-            ),
-            (
-                "python3 cli.py --type yolov26 --mode qc",
-                "Run qc using the saved paths",
-            ),
-        ]
-    )
-    print_help_lines(["  Direct run"])
-    print_help_command_pairs(
-        [
-            (
-                "python3 cli.py --type yolov10 --mode qc --model model.pt "
-                "--calib_dir calib/",
+                _help_qc_command(),
                 "Run qc by passing the required paths directly",
             ),
             (
-                "python3 cli.py --type yolov10 --mode mAP --images val/ "
-                "--annotations ann.json --fp-model ref.pt "
-                "--int-model compiled.tflite",
+                _help_map_command(),
                 "Run mAP by passing the required paths directly",
             ),
             (
-                "python3 cli.py --type yolov10 --mode test --model "
-                "compiled.tflite --image test.jpg --yaml coco.yaml",
+                _help_test_image_command(),
                 "Run test on one image by passing the required paths directly",
             ),
         ]
@@ -345,9 +413,13 @@ def render_main_help() -> None:
     print_help_section("More Help")
     print_help_command_pairs(
         [
-            ("python3 cli.py --mode qc --help", "Show detailed qc help"),
-            ("python3 cli.py --mode mAP --help", "Show detailed mAP help"),
-            ("python3 cli.py --mode test --help", "Show detailed test help"),
+            (_help_mode_details_command("qc"), "Show detailed qc help"),
+            (_help_mode_details_command("mAP"), "Show detailed mAP help"),
+            (_help_mode_details_command("test"), "Show detailed test help"),
+            (
+                "./docker/iqf configure qc --type yolov26",
+                "Use the Docker wrapper for interactive host-path setup",
+            ),
         ]
     )
 
@@ -367,15 +439,15 @@ def render_qc_help() -> None:
     )
 
     print_help_section("Required Arguments", ANSI_GREEN)
-    print_help_args(
-        [
-            ("--type TYPE", "Model family", "Required"),
-            ("--mode qc", "Select qc mode", "Required"),
-            ("--model MODEL", "Source model path", "Required"),
-            ("--calib_dir DIR", "Calibration image directory", "Required"),
-        ],
-        flag_color=ANSI_GREEN,
-    )
+    qc_rows = [
+        ("--type TYPE", "Model family", "Required"),
+        ("--model MODEL", "Source model path", "Required"),
+        ("--calib_dir DIR", "Calibration image directory", "Required"),
+    ]
+    mode_row = _mode_required_argument_row("qc")
+    if mode_row:
+        qc_rows.insert(1, mode_row)
+    print_help_args(qc_rows, flag_color=ANSI_GREEN)
 
     print_help_section("Optional Arguments", ANSI_YELLOW)
     print_help_args(
@@ -408,13 +480,7 @@ def render_qc_help() -> None:
     print_help_section("Example Commands")
     print_help_lines(
         [
-            "  Configure flow",
-            "    python3 cli.py --type yolov26 --configure qc",
-            "    python3 cli.py --type yolov26 --mode qc",
-            "",
-            "  Direct run",
-            "    python3 cli.py --type yolov26 --mode qc --model model.pt "
-            "--calib_dir calib/",
+            f"  {_help_qc_command()}",
         ]
     )
 
@@ -443,17 +509,17 @@ def render_map_help() -> None:
     )
 
     print_help_section("Required Arguments", ANSI_GREEN)
-    print_help_args(
-        [
-            ("--type TYPE", "Model family", "Required"),
-            ("--mode mAP", "Select mAP mode", "Required"),
-            ("--annotations PATH", "Annotation file or directory", "Required"),
-            ("--images DIR", "Image directory", "Required"),
-            ("--fp-model PATH", "Reference model path", "Required"),
-            ("--int-model PATH", "Compiled model path", "Required"),
-        ],
-        flag_color=ANSI_GREEN,
-    )
+    map_rows = [
+        ("--type TYPE", "Model family", "Required"),
+        ("--annotations PATH", "Annotation file or directory", "Required"),
+        ("--images DIR", "Image directory", "Required"),
+        ("--fp-model PATH", "Reference model path", "Required"),
+        ("--int-model PATH", "Compiled model path", "Required"),
+    ]
+    mode_row = _mode_required_argument_row("mAP")
+    if mode_row:
+        map_rows.insert(1, mode_row)
+    print_help_args(map_rows, flag_color=ANSI_GREEN)
 
     print_help_section("Optional Arguments", ANSI_YELLOW)
     print_help_args(
@@ -514,14 +580,7 @@ def render_map_help() -> None:
     print_help_section("Example Commands")
     print_help_lines(
         [
-            "  Configure flow",
-            "    python3 cli.py --type yolov26 --configure mAP",
-            "    python3 cli.py --type yolov26 --mode mAP",
-            "",
-            "  Direct run",
-            "    python3 cli.py --type yolov26 --mode mAP --images val/ "
-            "--annotations ann.json --fp-model ref.pt "
-            "--int-model compiled.tflite",
+            f"  {_help_map_command()}",
         ]
     )
 
@@ -553,25 +612,25 @@ def render_test_help() -> None:
     )
 
     print_help_section("Required Arguments", ANSI_GREEN)
-    print_help_args(
-        [
-            ("--type TYPE", "Model family", "Required"),
-            ("--mode test", "Select test mode", "Required"),
-            ("--model MODEL", "Compiled model path", "Required"),
-            ("--yaml YAML", "Class names YAML", "Required"),
-            (
-                "--image IMAGE",
-                "Single image path",
-                "Use exactly one of --image or --images",
-            ),
-            (
-                "--images DIR",
-                "Image directory",
-                "Use exactly one of --image or --images",
-            ),
-        ],
-        flag_color=ANSI_GREEN,
-    )
+    test_rows = [
+        ("--type TYPE", "Model family", "Required"),
+        ("--model MODEL", "Compiled model path", "Required"),
+        ("--yaml YAML", "Class names YAML", "Required"),
+        (
+            "--image IMAGE",
+            "Single image path",
+            "Use exactly one of --image or --images",
+        ),
+        (
+            "--images DIR",
+            "Image directory",
+            "Use exactly one of --image or --images",
+        ),
+    ]
+    mode_row = _mode_required_argument_row("test")
+    if mode_row:
+        test_rows.insert(1, mode_row)
+    print_help_args(test_rows, flag_color=ANSI_GREEN)
 
     print_help_section("Common Optional Arguments", ANSI_YELLOW)
     print_help_args(
@@ -635,18 +694,11 @@ def render_test_help() -> None:
     print_help_section("Example Commands")
     print_help_lines(
         [
-            "  Configure flow",
-            "    python3 cli.py --type yolov26 --configure test",
-            "    python3 cli.py --type yolov26 --mode test",
+            "  Single image",
+            f"    {_help_test_image_command()}",
             "",
-            "  Direct run",
-            "    Single image",
-            "      python3 cli.py --type yolov26 --mode test --model "
-            "model.tflite --image test.jpg --yaml coco.yaml",
-            "",
-            "    Image directory",
-            "      python3 cli.py --type yolov26 --mode test --model "
-            "model.tflite --images images/ --yaml coco.yaml",
+            "  Image directory",
+            f"    {_help_test_images_command()}",
         ]
     )
 
@@ -675,240 +727,6 @@ def render_help_for_mode(mode_name: str | None) -> None:
     render_main_help()
 
 
-def render_config_overview() -> None:
-    config = load_config()
-    print_help_title(
-        "Saved Configure Paths",
-        f"Current values from {CONFIG_PATH.name}. Use configure mode with --type and a mode name to update them.",
-    )
-
-    for model_type in PIPELINES:
-        print_help_section(model_type, ANSI_CYAN)
-        for mode_name in ("qc", "mAP", "test"):
-            print_help_lines([f"  {mode_name}"], ANSI_YELLOW)
-            rows = []
-            for field_name in MODE_REQUIRED_FIELDS[mode_name]:
-                value = config[model_type][mode_name].get(field_name, "").strip()
-                rows.append(
-                    (
-                        field_name,
-                        value if value else "[not set]",
-                        "saved path" if value else "missing",
-                    )
-                )
-            print_help_args(rows, flag_color=ANSI_WHITE, note_color=ANSI_BLUE)
-            print()
-
-    print_help_section("How To Configure", ANSI_GREEN)
-    print_help_command_pairs(
-        [
-            (
-                "python3 cli.py --type yolov26 --configure qc",
-                "Configure the required qc paths",
-            ),
-            (
-                "python3 cli.py --type yolov26 --configure mAP",
-                "Configure the required mAP paths",
-            ),
-            (
-                "python3 cli.py --type yolov26 --configure test",
-                "Configure the required test paths",
-            ),
-        ]
-    )
-
-
-def _default_config() -> dict:
-    return deepcopy(CONFIG_TEMPLATE)
-
-
-def _normalize_config(raw_config: object) -> dict:
-    config = _default_config()
-    if not isinstance(raw_config, dict):
-        return config
-
-    for model_type, model_cfg in raw_config.items():
-        if model_type not in config or not isinstance(model_cfg, dict):
-            continue
-        for mode_name in ("qc", "mAP", "test"):
-            mode_cfg = model_cfg.get(mode_name)
-            if not isinstance(mode_cfg, dict):
-                continue
-            for field_name in MODE_REQUIRED_FIELDS[mode_name]:
-                value = mode_cfg.get(field_name)
-                if isinstance(value, str):
-                    config[model_type][mode_name][field_name] = value
-        shared_cfg = model_cfg.get("shared")
-        if isinstance(shared_cfg, dict):
-            config[model_type]["shared"] = shared_cfg
-
-    return config
-
-
-def load_config() -> dict:
-    if not CONFIG_PATH.exists():
-        return _default_config()
-
-    try:
-        raw_config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SystemExit(f"[error] Invalid JSON in {CONFIG_PATH}: {exc}") from exc
-
-    return _normalize_config(raw_config)
-
-
-def save_config(config: dict) -> None:
-    normalized = _normalize_config(config)
-    CONFIG_PATH.write_text(
-        json.dumps(normalized, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _normalize_candidate_path(value: str) -> str:
-    return str(Path(value).expanduser())
-
-
-def validate_configure_path(
-    mode_name: str, field_name: str, value: str
-) -> tuple[bool, str]:
-    if not value.strip():
-        return False, "path is required"
-
-    normalized = Path(_normalize_candidate_path(value))
-    expected_kind = CONFIG_PATH_RULES[mode_name][field_name]
-    if not normalized.exists():
-        return False, "path does not exist"
-    if expected_kind == "file" and normalized.is_dir():
-        return False, "expected a file, but got a directory"
-    if expected_kind == "dir" and normalized.is_file():
-        return False, "expected a directory, but got a file"
-    if expected_kind == "file" and not normalized.is_file():
-        return False, "expected a file"
-    if expected_kind == "dir" and not normalized.is_dir():
-        return False, "expected a directory"
-    if expected_kind == "file_or_dir" and not (
-        normalized.is_file() or normalized.is_dir()
-    ):
-        return False, "expected an existing file or directory"
-
-    return True, ""
-
-
-def prompt_yes_no(prompt: str) -> bool:
-    while True:
-        value = input_prompt(
-            f"{prompt} ({ANSI_GREEN}y{ANSI_YELLOW}/{ANSI_RED}n{ANSI_YELLOW}): "
-        ).strip().lower()
-        if value in {"yes", "y"}:
-            return True
-        if value in {"no", "n"}:
-            return False
-        print_error("[error] Please answer y/yes or n/no.")
-
-
-def prompt_for_configured_path(
-    mode_name: str, field_name: str, prompt: str, current_value: str
-) -> str:
-    if current_value:
-        valid_current, current_error = validate_configure_path(
-            mode_name, field_name, current_value
-        )
-        if valid_current:
-            print_info(f"[info] Existing saved path: {current_value}")
-            if prompt_yes_no("Do you wish to use this path"):
-                return current_value
-        else:
-            show_warning(
-                f"[warn] Existing saved path for {mode_name}/{field_name} is invalid: "
-                f"{current_error}",
-                hold_seconds=0,
-            )
-
-    while True:
-        value = input_prompt(f"{prompt}: ").strip()
-        valid_value, error = validate_configure_path(mode_name, field_name, value)
-        if valid_value:
-            return _normalize_candidate_path(value)
-        print_error(f"[error] {error}")
-
-
-def run_configure_mode(model_type: str, mode_name: str) -> None:
-    config = load_config()
-    mode_config = config[model_type][mode_name]
-    run_command = f"python3 cli.py --type {model_type} --mode {mode_name}"
-
-    print_info(
-        f"[info] Updating {CONFIG_PATH.name} for --type {model_type} "
-        f"and --configure {mode_name}"
-    )
-    for field_name, prompt in CONFIG_PROMPTS[mode_name]:
-        mode_config[field_name] = prompt_for_configured_path(
-            mode_name, field_name, prompt, mode_config[field_name]
-        )
-
-    save_config(config)
-    summary_lines = [
-        f"[ok] saved {mode_name} paths for {model_type} in {CONFIG_PATH}",
-        *[
-            f"{field_name}: {mode_config[field_name]}"
-            for field_name in MODE_REQUIRED_FIELDS[mode_name]
-        ],
-        f"The {mode_name} mode is now ready for execution.",
-        f"Run: {run_command}",
-    ]
-    print_boxed_summary(
-        summary_lines,
-        white_line_indices={len(summary_lines) - 2, len(summary_lines) - 1},
-    )
-
-
-def apply_saved_mode_paths(args: argparse.Namespace) -> argparse.Namespace:
-    config = load_config()
-    mode_config = config[args.type][args.mode]
-    sourced_from_config: dict[str, bool] = {}
-    path_sources: dict[str, str] = {}
-
-    for field_name in MODE_REQUIRED_FIELDS[args.mode]:
-        if args.mode == "test" and field_name == "images" and args.image:
-            saved_value = mode_config.get(field_name, "")
-            if saved_value:
-                print_info(
-                    "[info] Using CLI --image and ignoring saved "
-                    f"{CONFIG_PATH.name} value for "
-                    f"{args.type}/{args.mode}/{field_name}."
-                )
-            sourced_from_config[field_name] = False
-            path_sources[field_name] = "CLI"
-            continue
-
-        current_value = getattr(args, field_name, None)
-        saved_value = mode_config.get(field_name, "")
-        if current_value:
-            if saved_value:
-                print_info(
-                    f"[info] Using CLI --{field_name.replace('_', '-')} "
-                    "and ignoring saved "
-                    f"{CONFIG_PATH.name} value for "
-                    f"{args.type}/{args.mode}/{field_name}."
-                )
-            sourced_from_config[field_name] = False
-            path_sources[field_name] = "CLI"
-            continue
-
-        if saved_value:
-            setattr(args, field_name, saved_value)
-            sourced_from_config[field_name] = True
-            path_sources[field_name] = "config.json"
-        else:
-            sourced_from_config[field_name] = False
-            path_sources[field_name] = ""
-
-    args._config_sourced_fields = sourced_from_config
-    args._path_sources = path_sources
-    return args
-
-
 def validate_mode_requirements(args: argparse.Namespace) -> None:
     missing_fields = []
     if args.mode == "test":
@@ -920,7 +738,7 @@ def validate_mode_requirements(args: argparse.Namespace) -> None:
             missing_fields.append("exactly one of --images or --image")
     else:
         missing_fields = [
-            f"--{field_name.replace('_', '-')}"
+            MODE_REQUIRED_FLAGS[args.mode][field_name]
             for field_name in MODE_REQUIRED_FIELDS[args.mode]
             if not getattr(args, field_name, None)
         ]
@@ -929,51 +747,39 @@ def validate_mode_requirements(args: argparse.Namespace) -> None:
         missing_flags = ", ".join(missing_fields)
         raise SystemExit(
             f"[error] {args.mode} requires {missing_flags}. "
-            f"Provide them explicitly or save them with "
-            f"'--type {args.type} --configure {args.mode}'."
+            "Provide required paths explicitly. Docker users can run:\n"
+            f"  ./docker/iqf configure {args.mode} --type {args.type}"
         )
 
 
 def print_mode_execution_paths(args: argparse.Namespace) -> None:
-    path_sources = getattr(args, "_path_sources", {})
-
     print_info(f"[info] {args.mode} execution paths")
     if args.mode == "qc":
         for field_name in ("model", "calib_dir"):
-            print_info(
-                f"[info] {field_name}: {getattr(args, field_name)} "
-                f"(source: {path_sources.get(field_name, 'CLI')})"
-            )
+            print_info(f"[info] {field_name}: {getattr(args, field_name)}")
         return
 
     if args.mode == "mAP":
         for field_name in ("annotations", "fp_model", "images", "int_model"):
-            print_info(
-                f"[info] {field_name}: {getattr(args, field_name)} "
-                f"(source: {path_sources.get(field_name, 'CLI')})"
-            )
+            print_info(f"[info] {field_name}: {getattr(args, field_name)}")
         return
 
     if args.mode == "test":
         for field_name in ("model", "yaml"):
-            print_info(
-                f"[info] {field_name}: {getattr(args, field_name)} "
-                f"(source: {path_sources.get(field_name, 'CLI')})"
-            )
+            print_info(f"[info] {field_name}: {getattr(args, field_name)}")
         if args.image:
-            print_info(f"[info] image: {args.image} (source: CLI)")
+            print_info(f"[info] image: {args.image}")
         else:
-            print_info(
-                f"[info] images: {args.images} "
-                f"(source: {path_sources.get('images', 'CLI')})"
-            )
+            print_info(f"[info] images: {args.images}")
 
 
 def parse_args():
     argv = sys.argv[1:]
-    if _has_bare_option(argv, "--configure"):
-        render_config_overview()
-        raise SystemExit(0)
+    if _contains_option(argv, "--configure"):
+        raise SystemExit(
+            "[error] Interactive configure mode has moved to the Docker wrapper.\n"
+            "Use: ./docker/iqf configure <qc|mAP|test> --type <type>"
+        )
 
     selected_mode = _extract_help_mode(argv)
     if not argv or _help_requested(argv):
@@ -988,25 +794,16 @@ def parse_args():
         "iQ-Foundry",
         add_help=False,
         usage=(
-            "cli.py --type {yolov10,yolov11,yolov26} --mode {qc,mAP,test} [options]\n"
-            "       cli.py --type {yolov10,yolov11,yolov26} --configure {qc,mAP,test}"
+            "cli.py --type {yolov10,yolov11,yolov26} --mode {qc,mAP,test} [options]"
         ),
     )
 
     common = p.add_argument_group("Global Required")
-    run_selector = common.add_mutually_exclusive_group(required=True)
-    run_selector.add_argument(
-        "--mode", choices=["qc", "test", "mAP"], help="Execution mode"
-    )
-    run_selector.add_argument(
-        "--configure",
-        choices=["qc", "test", "mAP"],
-        help="Save mode-required paths into config.json",
-    )
+    common.add_argument("--mode", choices=["qc", "test", "mAP"], required=True)
     common.add_argument(
         "--type",
         required=True,
-        choices=list(PIPELINES.keys()),
+        choices=MODEL_TYPES,
         help="Model family",
     )
     common.add_argument("--model", help="Model path")
@@ -1274,10 +1071,12 @@ def _run_qc_mode(args: argparse.Namespace) -> None:
         qc_head=effective_qc_head,
         qc_quant_scheme=effective_qc_quant_scheme,
     )
-    print(f"[ok] wrote: {effective_output}")
+    print(f"[ok] wrote: {resolve_output_display_path(effective_output)}")
 
 
 def _run_map_mode(args: argparse.Namespace) -> None:
+    from tool.test_map import run_fp_int_pair_map_eval
+
     if not args.annotations or not args.images:
         raise SystemExit("[error] mAP requires --annotations and --images")
     if not args.fp_model or not args.int_model:
@@ -1324,13 +1123,13 @@ def _run_map_mode(args: argparse.Namespace) -> None:
         OSError,
     ) as exc:
         raise SystemExit(f"[error] {exc}") from exc
-    print(f"[ok] wrote: {effective_output_text}")
+    print(f"[ok] wrote: {resolve_output_display_path(effective_output_text)}")
 
 
 def _resolve_test_mode_options(
     args: argparse.Namespace,
 ) -> tuple[dict, str, float, float, int, int, str, bool]:
-    defaults = TEST_DEFAULTS[args.type]
+    defaults = get_test_defaults(args.type)
     effective_output = resolve_default_test_output_path(args.type, args.output)
     effective_conf = args.conf if args.conf is not None else defaults["conf_thres"]
     effective_nms = args.nms if args.nms is not None else defaults["iou_thres"]
@@ -1376,23 +1175,6 @@ def _run_test_mode(args: argparse.Namespace) -> None:
         raise SystemExit("[error] test requires --yaml")
     if bool(args.images) == bool(args.image):
         raise SystemExit("[error] test requires exactly one of --images or --image")
-
-    config_sourced_fields = getattr(args, "_config_sourced_fields", {})
-    if any(
-        config_sourced_fields.get(field_name, False)
-        for field_name in ("model", "yaml", "images")
-    ):
-        if args.image:
-            raise SystemExit(
-                "[error] simple test mode supports saved --images only. "
-                "Use explicit CLI flags for single-image test runs."
-            )
-        if not args.adb:
-            print_info(
-                "[info] test simple path detected. Enabling adb mode "
-                "automatically."
-            )
-            args.adb = True
 
     show_warning(
         "[warn] Caution: make sure --type matches the quantized model family "
@@ -1448,16 +1230,11 @@ def _run_test_mode(args: argparse.Namespace) -> None:
         OSError,
     ) as exc:
         raise SystemExit(f"[error] {exc}") from exc
-    print(f"[ok] wrote: {effective_output}")
+    print(f"[ok] wrote: {resolve_output_display_path(effective_output)}")
 
 
 def main():
     args = parse_args()
-    if args.configure:
-        run_configure_mode(args.type, args.configure)
-        return
-
-    args = apply_saved_mode_paths(args)
     validate_mode_requirements(args)
 
     if is_iq9_runtime() and (args.mode != "test" or args.adb):
