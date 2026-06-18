@@ -133,6 +133,32 @@
   </table>
 </div>
 
+## Explore Other Documentation
+
+<div align="center">
+  <table>
+    <thead>
+      <tr>
+        <th>Document</th>
+        <th>Purpose</th>
+        <th>Use It When</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a href="./docs/other_model_flow.md"><code>docs/other_model_flow.md</code></a></td>
+        <td>High-level flow guide for unsupported or custom models outside the current native iQ-Foundry path.</td>
+        <td>You want to explore bring-your-own-model onboarding beyond the built-in workflows.</td>
+      </tr>
+      <tr>
+        <td><a href="./docker/Docker.md"><code>docker/Docker.md</code></a></td>
+        <td>Fallback guide for building the iQF Docker image locally.</td>
+        <td>You need to build the container image instead of pulling it from Docker Hub.</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
 ## Changelog
 
 Please refer to the [Changelog](./docs/changelog.md) for all updates.
