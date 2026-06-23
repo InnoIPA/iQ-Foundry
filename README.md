@@ -46,7 +46,7 @@
         <div align="center">
           <img src="./docs/Images/windows_logo.png" alt="Windows logo" height="96"><br>
           <strong>Windows Host</strong><br>
-          Windows 11 Docker Engine inside WSL<br><br>
+          Windows 11 with Docker Engine inside WSL<br><br>
           <a href="./Windows_host.md">Open Windows Host Guide</a>
         </div>
       </td>
