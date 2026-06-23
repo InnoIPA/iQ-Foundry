@@ -1,0 +1,427 @@
+#!/usr/bin/env python3
+# Copyright 2026 Innodisk Corp.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from iqf_path_mapper import (
+    DEFAULT_DOCKERFILE,
+    MODE_CHOICES,
+    MODE_PATH_SPECS,
+    MODEL_TYPES,
+    WrapperError,
+    default_repo_root,
+    docker_config_path,
+    format_command,
+    normalize_host_path,
+    plan_build_command,
+    plan_run_command,
+    plan_shell_command,
+    prompt_for_mode_paths,
+    resolve_image_name,
+    save_mode_paths,
+)
+
+COMMAND_CHOICES = {"build", "shell", "configure", "run"}
+BUILD_DEFAULT_IMAGE = "iq-foundry:local"
+ANSI_RED = "\033[31m"
+ANSI_GREEN = "\033[32m"
+ANSI_YELLOW = "\033[33m"
+ANSI_CYAN = "\033[36m"
+ANSI_WHITE = "\033[97m"
+ANSI_RESET = "\033[0m"
+
+
+# configure runs on the host before any container or model-specific Python dependencies are
+# available, so the wrapper keeps its own tiny console helpers instead of importing cli.py.
+def color_text(text: str, color: str) -> str:
+    return f"{color}{text}{ANSI_RESET}"
+
+
+def print_error(message: str) -> None:
+    print(color_text(message, ANSI_RED))
+
+
+def print_warning(message: str) -> None:
+    print(color_text(message, ANSI_YELLOW))
+
+
+def print_info(message: str) -> None:
+    print(color_text(message, ANSI_CYAN))
+
+
+def print_success(message: str) -> None:
+    print(color_text(message, ANSI_GREEN))
+
+
+def print_boxed_summary(lines: list[str]) -> None:
+    width = max(len(line) for line in lines)
+    border = "+" + "-" * (width + 2) + "+"
+    print(color_text(border, ANSI_GREEN))
+    for line in lines:
+        print(color_text(f"| {line.ljust(width)} |", ANSI_WHITE))
+    print(color_text(border, ANSI_GREEN))
+
+
+def next_run_command(mode: str, model_type: str) -> str:
+    command = f"./docker/iqf run {mode} --type {model_type}"
+    # Test configure is primarily used for on-device runs, so the next-step hint includes the
+    # common ADB flag while keeping the saved path contract unchanged.
+    if mode == "test":
+        command += " --adb"
+    return command
+
+
+def configure_ready_box_lines(mode: str, model_type: str) -> list[str]:
+    return [
+        f"{mode} mode is ready for execution!",
+        f"Run: {next_run_command(mode, model_type)}",
+    ]
+
+
+def print_global_help() -> None:
+    print("Usage:")
+    print("  ./docker/iqf build [--dry-run]")
+    print("  ./docker/iqf shell [--dry-run] [--qai-hub] [--adb]")
+    print("  ./docker/iqf configure <qc|mAP|test> --type <type>")
+    print("  ./docker/iqf run <qc|mAP|test> --type <type> [known path flags] [backend flags...]")
+    print()
+    print("Image override:")
+    print("  Use IQF_DOCKER_IMAGE or place --image <docker-tag> before the command,")
+    print("  or between the command and mode. This avoids conflict with test --image.")
+    print("  Use --repo-root <path> the same way when you need to target a different")
+    print("  checkout root.")
+    print()
+    print("Examples:")
+    print("  ./docker/iqf build")
+    print("  ./docker/iqf shell --adb")
+    print("  ./docker/iqf configure qc --type yolov26")
+    print("  ./docker/iqf run qc --type yolov26 --model /data/model.pt --calib_dir /data/calib")
+    print("  ./docker/iqf run test --type yolov26 --model /data/model.tflite --yaml /data/coco.yaml --image /data/test.jpg")
+
+
+def _extract_option_value(argv: list[str], index: int, option: str) -> tuple[str, int]:
+    token = argv[index]
+    if token == option:
+        if index + 1 >= len(argv):
+            raise WrapperError(f"[error] {option} requires a value")
+        return argv[index + 1], index + 2
+    return token.split("=", 1)[1], index + 1
+
+
+def consume_leading_overrides(
+    argv: list[str],
+    stop_tokens: set[str],
+) -> tuple[str | None, str | None, list[str]]:
+    # Wrapper-only overrides are allowed ahead of the command or ahead of the mode.
+    # Once we hit a command/mode token, parsing stops so backend flags can pass through untouched.
+    image_override: str | None = None
+    repo_root_override: str | None = None
+    index = 0
+
+    while index < len(argv):
+        token = argv[index]
+        if token in stop_tokens or token in {"-h", "--help"}:
+            break
+        if token == "--image" or token.startswith("--image="):
+            image_override, index = _extract_option_value(argv, index, "--image")
+            continue
+        if token == "--repo-root" or token.startswith("--repo-root="):
+            repo_root_override, index = _extract_option_value(argv, index, "--repo-root")
+            continue
+        break
+
+    return image_override, repo_root_override, argv[index:]
+
+
+def resolve_repo_root(repo_root_override: str | None) -> Path:
+    repo_root = (
+        normalize_host_path(repo_root_override)
+        if repo_root_override
+        else default_repo_root(__file__)
+    )
+    if not (repo_root / "cli.py").is_file():
+        raise WrapperError(f"[error] cli.py not found under repo root: {repo_root}")
+    if not (repo_root / DEFAULT_DOCKERFILE).is_file():
+        raise WrapperError(
+            f"[error] Dockerfile not found under repo root: {repo_root / DEFAULT_DOCKERFILE}"
+        )
+    return repo_root
+
+
+def merge_override(
+    outer_image: str | None,
+    outer_repo_root: str | None,
+    inner_image: str | None,
+    inner_repo_root: str | None,
+) -> tuple[str | None, str | None]:
+    return inner_image or outer_image, inner_repo_root or outer_repo_root
+
+
+def print_warnings(warnings: list[str]) -> None:
+    for warning in warnings:
+        print(warning)
+
+
+def execute_plan(plan, dry_run: bool) -> int:
+    print_warnings(plan.warnings)
+    if dry_run:
+        if plan.inner_command:
+            print("Inner command:")
+            print(f"  {format_command(plan.inner_command)}")
+        print("Docker command:")
+        print(f"  {format_command(plan.docker_command)}")
+        return 0
+
+    if plan.host_pre_command:
+        host_pre = subprocess.run(plan.host_pre_command, cwd=plan.cwd)
+        if host_pre.returncode != 0:
+            return host_pre.returncode
+
+    completed = subprocess.run(plan.docker_command, cwd=plan.cwd)
+    return completed.returncode
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="./docker/iqf build", allow_abbrev=False)
+    parser.add_argument("--dry-run", action="store_true")
+    return parser
+
+
+def shell_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="./docker/iqf shell", allow_abbrev=False)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--qai-hub", action="store_true")
+    parser.add_argument("--adb", action="store_true")
+    return parser
+
+
+def configure_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="./docker/iqf configure", allow_abbrev=False)
+    parser.add_argument("mode", choices=MODE_CHOICES)
+    parser.add_argument("--type", required=True, choices=MODEL_TYPES)
+    return parser
+
+
+def run_parser(mode: str) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=f"./docker/iqf run {mode}",
+        allow_abbrev=False,
+    )
+    parser.add_argument("mode", choices=MODE_CHOICES)
+    parser.add_argument("--type", required=True, choices=MODEL_TYPES)
+    parser.add_argument("--save", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    for field_name, spec in MODE_PATH_SPECS[mode].items():
+        parser.add_argument(spec.flag, dest=field_name)
+    if mode == "test":
+        parser.add_argument("--adb", action="store_true")
+    return parser
+
+
+def run_command_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="./docker/iqf run", allow_abbrev=False)
+    parser.add_argument("mode", nargs="?", choices=MODE_CHOICES)
+    parser.add_argument("--type")
+    parser.add_argument("--save", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--adb",
+        action="store_true",
+        help="Wrapper/runtime flag for test mode. Use './docker/iqf run <mode> --help' for backend mode help.",
+    )
+    return parser
+
+
+def dispatch_backend_mode_help(repo_root: Path, mode: str) -> int:
+    help_env = os.environ.copy()
+    help_env["IQF_HELP_COMMAND_STYLE"] = "wrapper"
+    return subprocess.run(
+        [sys.executable, "cli.py", "--mode", mode, "--help"],
+        cwd=repo_root,
+        env=help_env,
+    ).returncode
+
+
+def handle_build(
+    argv: list[str],
+    outer_image: str | None,
+    outer_repo_root: str | None,
+) -> int:
+    inner_image, inner_repo_root, remaining = consume_leading_overrides(argv, set())
+    image_override, repo_root_override = merge_override(
+        outer_image, outer_repo_root, inner_image, inner_repo_root
+    )
+    args = build_parser().parse_args(remaining)
+    repo_root = resolve_repo_root(repo_root_override)
+    # Build uses a local-only default tag so the output stays distinct from the published runtime
+    # image. Runtime commands still use the shared published default from iqf_path_mapper.py.
+    image_name = image_override or os.environ.get("IQF_DOCKER_IMAGE") or BUILD_DEFAULT_IMAGE
+    plan = plan_build_command(repo_root, image_name)
+    return execute_plan(plan, args.dry_run)
+
+
+def handle_shell(
+    argv: list[str],
+    outer_image: str | None,
+    outer_repo_root: str | None,
+) -> int:
+    inner_image, inner_repo_root, remaining = consume_leading_overrides(argv, set())
+    image_override, repo_root_override = merge_override(
+        outer_image, outer_repo_root, inner_image, inner_repo_root
+    )
+    args = shell_parser().parse_args(remaining)
+    repo_root = resolve_repo_root(repo_root_override)
+    image_name = resolve_image_name(image_override)
+    plan = plan_shell_command(
+        repo_root=repo_root,
+        image_name=image_name,
+        use_qai_hub=args.qai_hub,
+        use_adb=args.adb,
+        dry_run=args.dry_run,
+    )
+    return execute_plan(plan, args.dry_run)
+
+
+def handle_configure(
+    argv: list[str],
+    outer_image: str | None,
+    outer_repo_root: str | None,
+) -> int:
+    inner_image, inner_repo_root, remaining = consume_leading_overrides(
+        argv, set(MODE_CHOICES)
+    )
+    _, repo_root_override = merge_override(
+        outer_image, outer_repo_root, inner_image, inner_repo_root
+    )
+    args = configure_parser().parse_args(remaining)
+    repo_root = resolve_repo_root(repo_root_override)
+    config_path = docker_config_path(repo_root)
+    # The prompt text itself stays unchanged; only the wrapper-owned status lines are colorized.
+    saved_inputs = prompt_for_mode_paths(
+        config_path,
+        args.type,
+        args.mode,
+        info_printer=print_info,
+        warning_printer=print_warning,
+        error_printer=print_error,
+    )
+    save_mode_paths(config_path, args.type, args.mode, saved_inputs)
+    print_success(
+        f"[ok] saved {args.mode} input paths for {args.type} in {config_path}"
+    )
+    for field_name, (_, host_path) in saved_inputs.items():
+        print_info(f"[info] {field_name}: {host_path}")
+    # The box keeps the guidance minimal and action-oriented. Test mode includes --adb in the
+    # next-step hint because that is the common on-device flow, but the flag is still not saved.
+    print()
+    print_boxed_summary(configure_ready_box_lines(args.mode, args.type))
+    return 0
+
+
+def handle_run(
+    argv: list[str],
+    outer_image: str | None,
+    outer_repo_root: str | None,
+) -> int:
+    inner_image, inner_repo_root, remaining = consume_leading_overrides(
+        argv, set(MODE_CHOICES)
+    )
+    image_override, repo_root_override = merge_override(
+        outer_image, outer_repo_root, inner_image, inner_repo_root
+    )
+    if not remaining or remaining[0] in {"-h", "--help"}:
+        print(run_command_parser().format_help())
+        return 0
+
+    mode = remaining[0]
+    if mode not in MODE_CHOICES:
+        raise WrapperError(
+            f"[error] Unsupported mode {mode}. Use one of: {', '.join(MODE_CHOICES)}"
+        )
+    # Mode help must come from cli.py itself so the wrapper shows the exact detailed backend help,
+    # including mode-specific flags and any terminal color the backend emits.
+    if any(token in {"-h", "--help"} for token in remaining[1:]):
+        repo_root = resolve_repo_root(repo_root_override)
+        return dispatch_backend_mode_help(repo_root, mode)
+
+    parser = run_parser(mode)
+    # The wrapper only consumes its own controls plus path flags that need host-to-container
+    # translation. Everything else stays in passthrough so backend flags are preserved verbatim.
+    args, passthrough = parser.parse_known_args(remaining)
+
+    known_paths = {
+        field_name: getattr(args, field_name, None)
+        for field_name in MODE_PATH_SPECS[mode]
+    }
+    repo_root = resolve_repo_root(repo_root_override)
+    image_name = resolve_image_name(image_override)
+
+    plan, saved_inputs = plan_run_command(
+        repo_root=repo_root,
+        image_name=image_name,
+        mode=mode,
+        model_type=args.type,
+        provided_paths=known_paths,
+        passthrough_args=passthrough,
+        use_adb=getattr(args, "adb", False),
+        dry_run=args.dry_run,
+    )
+
+    if args.save and args.dry_run:
+        print("[info] --save skipped in dry-run mode.")
+    elif args.save:
+        save_mode_paths(docker_config_path(repo_root), args.type, mode, saved_inputs)
+        print(
+            f"[ok] saved {mode} input paths for {args.type} in "
+            f"{docker_config_path(repo_root)}"
+        )
+
+    return execute_plan(plan, args.dry_run)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        outer_image, outer_repo_root, remaining = consume_leading_overrides(
+            argv, COMMAND_CHOICES
+        )
+        if not remaining or remaining[0] in {"-h", "--help"}:
+            print_global_help()
+            return 0
+
+        command = remaining[0]
+        rest = remaining[1:]
+
+        if command == "build":
+            return handle_build(rest, outer_image, outer_repo_root)
+        if command == "shell":
+            return handle_shell(rest, outer_image, outer_repo_root)
+        if command == "configure":
+            return handle_configure(rest, outer_image, outer_repo_root)
+        if command == "run":
+            return handle_run(rest, outer_image, outer_repo_root)
+        raise WrapperError(f"[error] Unknown command: {command}")
+    except WrapperError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

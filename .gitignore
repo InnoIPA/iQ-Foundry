@@ -8,3 +8,9 @@ venv/
 
 # OS junk
 .DS_Store
+
+# Local docker wrapper config
+.iqf/
+
+asset/
+out/
