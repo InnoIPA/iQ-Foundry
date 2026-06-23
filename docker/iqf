@@ -39,6 +39,7 @@ from iqf_path_mapper import (
 )
 
 COMMAND_CHOICES = {"build", "shell", "configure", "run"}
+BUILD_DEFAULT_IMAGE = "iq-foundry:local"
 ANSI_RED = "\033[31m"
 ANSI_GREEN = "\033[32m"
 ANSI_YELLOW = "\033[33m"
@@ -269,7 +270,9 @@ def handle_build(
     )
     args = build_parser().parse_args(remaining)
     repo_root = resolve_repo_root(repo_root_override)
-    image_name = resolve_image_name(image_override)
+    # Build uses a local-only default tag so the output stays distinct from the published runtime
+    # image. Runtime commands still use the shared published default from iqf_path_mapper.py.
+    image_name = image_override or os.environ.get("IQF_DOCKER_IMAGE") or BUILD_DEFAULT_IMAGE
     plan = plan_build_command(repo_root, image_name)
     return execute_plan(plan, args.dry_run)
 

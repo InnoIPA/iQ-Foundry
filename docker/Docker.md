@@ -34,14 +34,26 @@ Build the default image:
 The default image tag is:
 
 ```text
-innodiskorg/iqf:latest
+iq-foundry:local
 ```
+
+To use this built image with `./docker/iqf run ...` and `./docker/iqf shell`, export the image
+name in each new terminal:
+
+```bash
+export IQF_DOCKER_IMAGE=iq-foundry:local
+```
+
+Otherwise the wrapper will fall back to the published default image and Docker may pull it.
 
 Use dry-run to inspect the generated Docker command without building:
 
 ```bash
 ./docker/iqf build --dry-run
 ```
+
+`./docker/iqf run ...` and `./docker/iqf shell` still default to the published image unless you
+override them with `--image` or `IQF_DOCKER_IMAGE`.
 
 ## Build with a Custom Tag
 
@@ -62,7 +74,7 @@ IQF_DOCKER_IMAGE=my-iqf:dev ./docker/iqf build
 If you need the raw Docker command, the wrapper build is equivalent to:
 
 ```bash
-docker build -f docker/Dockerfile -t innodiskorg/iqf:latest .
+docker build -f docker/Dockerfile -t iq-foundry:local .
 ```
 
 Run that from the repository root.
@@ -72,13 +84,13 @@ Run that from the repository root.
 After the build completes, you can start a shell in the image:
 
 ```bash
-./docker/iqf shell
+./docker/iqf shell --image iq-foundry:local
 ```
 
 Or verify directly with Docker:
 
 ```bash
-docker run --rm -it innodiskorg/iqf:latest bash
+docker run --rm -it iq-foundry:local bash
 ```
 
 ## Next Step
