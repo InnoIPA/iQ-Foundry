@@ -543,6 +543,22 @@ function Get-UsbipdList {
     }
 }
 
+function Confirm-QcOnlyContinuation {
+    param([string]$Reason)
+
+    # This bypass only exists for qc-only setup when there is no usable target device. The normal
+    # USB attach and verification path for mAP/test stays unchanged once a BUSID is resolved.
+    Write-WarnLine $Reason
+    Write-WarnLine "Only qc mode can work without a connected target device."
+
+    if (Read-YesNo -Prompt "Continue to the WSL shell anyway?" -DefaultYes $false) {
+        Write-Info "Continuing without USB target setup. You can use qc mode after WSL opens."
+        return $true
+    }
+
+    throw "USB target setup was cancelled. Connect the target device and rerun this script for mAP or test."
+}
+
 function Resolve-UsbBusId {
     param(
         [pscustomobject]$UsbList,
@@ -555,7 +571,12 @@ function Resolve-UsbBusId {
         if ($UsbList.Text) {
             Write-Host $UsbList.Text
         }
-        throw "usbipd did not report any attachable USB devices."
+        if ($RequestedBusId) {
+            throw "BUSID '$RequestedBusId' was not found in the current usbipd device list."
+        }
+        if (Confirm-QcOnlyContinuation -Reason "usbipd did not report any attachable USB devices, so no target device is available for mAP or test.") {
+            return $null
+        }
     }
 
     if ($RequestedBusId) {
@@ -593,7 +614,7 @@ function Resolve-UsbBusId {
     }
 
     Write-Host $UsbList.Text
-    $manualBusId = Read-Host "Could not auto-detect a Qualcomm USB device. Enter a BUSID manually, or press Enter to cancel"
+    $manualBusId = Read-Host "Could not auto-detect a Qualcomm USB device. Enter a BUSID manually, or press Enter for qc-only options"
     if (-not [string]::IsNullOrWhiteSpace($manualBusId)) {
         $chosen = $UsbList.Devices | Where-Object { $_.BusId -ieq $manualBusId.Trim() } | Select-Object -First 1
         if ($null -eq $chosen) {
@@ -603,7 +624,9 @@ function Resolve-UsbBusId {
         return $chosen.BusId
     }
 
-    throw "Could not auto-detect the USB device using Qualcomm name matching. Rerun with -BusId <BUSID> or -SkipUsb."
+    if (Confirm-QcOnlyContinuation -Reason "No Qualcomm USB target device was selected, so mAP and test cannot run from this host right now.") {
+        return $null
+    }
 }
 
 function Get-UsbipdDeviceState {
@@ -809,14 +832,16 @@ try {
         Write-Info "Skipping usbipd and USB verification because -SkipUsb was provided."
     }
     else {
-        $usbChecked = $true
         $usbipdPath = Ensure-Usbipd
         $usbList = Get-UsbipdList -UsbipdPath $usbipdPath
         $resolvedBusId = Resolve-UsbBusId -UsbList $usbList -RequestedBusId $BusId
-        # Keep WSL running while usbipd attaches so the distro is immediately available as a target.
-        $script:WslKeepAlive = Start-WslKeepAlive -TargetDistro $Distro
-        Attach-UsbToWsl -UsbipdPath $usbipdPath -ResolvedBusId $resolvedBusId -Reattach:$ForceUsbAttach
-        Invoke-WslVerification -TargetDistro $Distro
+        if (-not [string]::IsNullOrWhiteSpace($resolvedBusId)) {
+            $usbChecked = $true
+            # Keep WSL running while usbipd attaches so the distro is immediately available as a target.
+            $script:WslKeepAlive = Start-WslKeepAlive -TargetDistro $Distro
+            Attach-UsbToWsl -UsbipdPath $usbipdPath -ResolvedBusId $resolvedBusId -Reattach:$ForceUsbAttach
+            Invoke-WslVerification -TargetDistro $Distro
+        }
     }
 
     # Final verification runs before the shell opens so users land in a distro that matches the
