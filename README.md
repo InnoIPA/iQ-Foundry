@@ -36,7 +36,7 @@
     <tr>
       <td align="center" width="50%">
         <div align="center">
-          <img src="./docs/Images/ubuntu_logo.png" alt="Ubuntu logo" width="96"><br>
+          <img src="./docs/Images/ubuntu_logo.png" alt="Ubuntu logo" height="96"><br>
           <strong>Ubuntu Host</strong><br>
           Native Ubuntu 22.04 with Docker Engine<br><br>
           <a href="./Ubuntu_host.md">Open Ubuntu Host Guide</a>
@@ -44,9 +44,9 @@
       </td>
       <td align="center" width="50%">
         <div align="center">
-          <img src="./docs/Images/windows_logo.png" alt="Windows logo" width="96"><br>
+          <img src="./docs/Images/windows_logo.png" alt="Windows logo" height="96"><br>
           <strong>Windows Host</strong><br>
-          Windows 11 + WSL Ubuntu with Docker Engine inside WSL<br><br>
+          Windows 11 Docker Engine inside WSL<br><br>
           <a href="./Windows_host.md">Open Windows Host Guide</a>
         </div>
       </td>

@@ -15,6 +15,10 @@ before integrating it into your application flow.
 > This is a flow guide, not an end-to-end tutorial. The exact export, pre-processing,
 > post-processing, and validation steps depend on your model.
 
+> [!NOTE]
+> This workflow is based on our practical integration experience and recommended usage patterns. For
+> more details please visit [Qualcomm AI Hub workbench documentations](https://workbench.aihub.qualcomm.com/docs/).
+
 ---
 
 ## High-Level Workflow
@@ -267,14 +271,3 @@ Use Qualcomm AI Hub Workbench for other custom classification, detection, and se
 - Inference examples: https://workbench.aihub.qualcomm.com/docs/hub/inference_examples.html
 
 ---
-
-## Request Native iQ-Foundry Support
-
-If you need a model to be directly supported by iQ-Foundry, please raise a GitHub issue and
-include:
-
-- `Model Name:`
-- `Runtime requirement:`
-- `Precision Required:`
-
-Our team will analyze the request and consider it for future iQ-Foundry support.
