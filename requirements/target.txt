@@ -7,9 +7,10 @@
 # - qc and host-side mAP/test orchestration are x86-only (see requirements/host.txt)
 #
 # NOTE:
-# - cv2 is required by tool/inference.py but is system-provided on IQ9.
+# - cv2 is required by tool/inference_tflite.py but is system-provided on IQ9.
 # - Verified on device (2026-03-13): cv2.__version__ == 4.11.0
 # - Do not pip-install opencv on target via this file.
+# - onnxruntime is required for on-device inference. The wheel is provided by Innodisk under iQ-Foundry/wheels/. Invoking onnxruntime based mAP or test mode will automatically install the wheel to the target, no manual steps required to be followed.
 
 numpy==1.26.4
 tensorflow==2.17.0
