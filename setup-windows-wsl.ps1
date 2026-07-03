@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env pwsh
 # Copyright 2026 Innodisk Corp.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -190,11 +190,63 @@ function Get-UsbipdCommand {
     return $null
 }
 
+function Test-WslUpdateRequired {
+    param($Result)
+
+    $text = ""
+    if (($null -ne $Result) -and ($null -ne $Result.Text)) {
+        $text = ($Result.Text.ToString() -replace "`0", "").Trim()
+    }
+
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $false
+    }
+
+    $patterns = @(
+        'windows subsystem for linux must be updated',
+        'wsl\.exe --update',
+        'press any key to install windows subsystem for linux'
+    )
+
+    foreach ($pattern in $patterns) {
+        if ($text -match $pattern) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Update-WslIfRequired {
+    Write-WarnLine "WSL is installed but must be updated before distro queries can continue."
+    Write-Info "Attempting to update WSL with 'wsl.exe --update'."
+    $updateResult = Invoke-ExternalCommand -FilePath "wsl.exe" -ArgumentList @("--update") -AllowFailure
+    if ($updateResult.ExitCode -eq 0) {
+        return $true
+    }
+
+    Write-WarnLine "WSL update via 'wsl.exe --update' did not complete successfully. Retrying with web download."
+    Write-Info "Attempting to update WSL with 'wsl.exe --update --web-download'."
+    $webDownloadResult = Invoke-ExternalCommand -FilePath "wsl.exe" -ArgumentList @("--update", "--web-download") -AllowFailure
+    if ($webDownloadResult.ExitCode -eq 0) {
+        return $true
+    }
+
+    throw "WSL could not be updated automatically. Run 'wsl.exe --update --web-download' manually, then rerun this script."
+}
+
 function Get-WslDistros {
     # Read the live distro table first so later steps can decide whether WSL itself is missing,
     # whether the requested distro needs to be installed, or whether it just needs conversion.
     $result = Invoke-ExternalCommand -FilePath "wsl.exe" -ArgumentList @("-l", "-v") -AllowFailure -SuppressOutput
     $script:LastWslListResult = $result
+
+    if (Test-WslUpdateRequired -Result $result) {
+        $null = Update-WslIfRequired
+        $result = Invoke-ExternalCommand -FilePath "wsl.exe" -ArgumentList @("-l", "-v") -AllowFailure -SuppressOutput
+        $script:LastWslListResult = $result
+    }
+
     $distros = @()
 
     $installableMissingPatterns = @(
@@ -590,21 +642,21 @@ function Resolve-UsbBusId {
     }
 
     $matches = @($UsbList.Devices | Where-Object {
-        $_.Raw -match 'Qualcomm' -or $_.Device -match 'Qualcomm'
+        $_.Raw -match 'Qualcomm|exmp-q911' -or $_.Device -match 'Qualcomm|exmp-q911'
     })
 
     if ($matches.Count -eq 1) {
-        Write-Info "Auto-detected Qualcomm USB device '$($matches[0].BusId)'."
+        Write-Info "Auto-detected Qualcomm/exmp-q911 USB device '$($matches[0].BusId)'."
         return $matches[0].BusId
     }
 
     if ($matches.Count -gt 1) {
-        Write-WarnLine "Multiple Qualcomm USB devices matched. Choose the correct BUSID."
+        Write-WarnLine "Multiple Qualcomm/exmp-q911 USB devices matched. Choose the correct BUSID."
         foreach ($match in $matches) {
             Write-Host $match.Raw
         }
 
-        $selection = Read-RequiredValue -Prompt "Enter the BUSID to use" -MissingMessage "A BUSID is required when multiple Qualcomm USB devices are present. Re-run with -BusId <BUSID>."
+        $selection = Read-RequiredValue -Prompt "Enter the BUSID to use" -MissingMessage "A BUSID is required when multiple Qualcomm/exmp-q911 USB devices are present. Re-run with -BusId <BUSID>."
 
         $chosen = $UsbList.Devices | Where-Object { $_.BusId -ieq $selection } | Select-Object -First 1
         if ($null -eq $chosen) {
@@ -614,7 +666,7 @@ function Resolve-UsbBusId {
     }
 
     Write-Host $UsbList.Text
-    $manualBusId = Read-Host "Could not auto-detect a Qualcomm USB device. Enter a BUSID manually, or press Enter for qc-only options"
+    $manualBusId = Read-Host "Could not auto-detect a Qualcomm/exmp-q911 USB device. Enter a BUSID manually, or press Enter for qc-only options"
     if (-not [string]::IsNullOrWhiteSpace($manualBusId)) {
         $chosen = $UsbList.Devices | Where-Object { $_.BusId -ieq $manualBusId.Trim() } | Select-Object -First 1
         if ($null -eq $chosen) {
@@ -624,7 +676,7 @@ function Resolve-UsbBusId {
         return $chosen.BusId
     }
 
-    if (Confirm-QcOnlyContinuation -Reason "No Qualcomm USB target device was selected, so mAP and test cannot run from this host right now.") {
+    if (Confirm-QcOnlyContinuation -Reason "No Qualcomm/exmp-q911 USB target device was selected, so mAP and test cannot run from this host right now.") {
         return $null
     }
 }

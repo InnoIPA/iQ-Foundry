@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bash
 # Copyright 2026 Innodisk Corp.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
