@@ -13,8 +13,8 @@
 ![Repository overview](./docs/Images/overall-workflow.png)
 
 <p align="center">
-  <img src="docs/Images/litert-logo.png" alt="LiteRT" style="height: 20px; width: auto; vertical-align: middle;">
-  <img src="docs/Images/ort-logo.png" alt="ONNX Runtime" style="height: 18px; width: auto; vertical-align: middle;">
+  <img src="docs/Images/litert-logo.png" alt="LiteRT" style="height: 42px; width: auto; vertical-align: middle;">
+  <img src="docs/Images/ort-logo.png" alt="ONNX Runtime" style="height: 38px; width: auto; vertical-align: middle;">
   <br>
   <strong>New in v0.0.3:</strong> FP32 and mixed-precision deployment support!!
 </p>
