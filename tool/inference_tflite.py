@@ -1166,7 +1166,7 @@ def run_test_inference_adb(
     remote_run_dir = f"{remote_root}/test_run_{os.getpid()}_{int(time.time() * 1000)}"
     remote_model = f"{remote_run_dir}/{Path(model_path).name}"
     remote_yaml = f"{remote_run_dir}/{Path(yaml_path).name}"
-    remote_script = f"{remote_run_dir}/inference.py"
+    remote_script = f"{remote_run_dir}/inference_tflite.py"
     remote_img_dir = f"{remote_run_dir}/images"
     remote_output_dir = f"{remote_run_dir}/output"
 
@@ -1249,7 +1249,7 @@ def run_test_inference_adb(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="inference.py")
+    parser = argparse.ArgumentParser(prog="inference_tflite.py")
     parser.add_argument("--model", required=True, help="Path to TFLite model")
     parser.add_argument("--yaml", required=True, help="YAML with class names")
     parser.add_argument("--img-dir", required=True, help="Directory containing images")
