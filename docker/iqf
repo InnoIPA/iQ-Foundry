@@ -25,6 +25,10 @@ from iqf_path_mapper import (
     MODE_CHOICES,
     MODE_PATH_SPECS,
     MODEL_TYPES,
+    PRECISION_CHOICES,
+    RUNTIME_CHOICES,
+    SUPPORTED_RUNTIME_PRECISION_COMBINATIONS,
+    SUPPORTED_RUNTIME_PRECISION_ROWS,
     WrapperError,
     default_repo_root,
     docker_config_path,
@@ -79,8 +83,11 @@ def print_boxed_summary(lines: list[str]) -> None:
     print(color_text(border, ANSI_GREEN))
 
 
-def next_run_command(mode: str, model_type: str) -> str:
-    command = f"./docker/iqf run {mode} --type {model_type}"
+def next_run_command(mode: str, model_type: str, runtime: str, precision: str) -> str:
+    command = (
+        f"./docker/iqf run {mode} --type {model_type} "
+        f"--runtime {runtime} --precision {precision}"
+    )
     # Test configure is primarily used for on-device runs, so the next-step hint includes the
     # common ADB flag while keeping the saved path contract unchanged.
     if mode == "test":
@@ -88,10 +95,12 @@ def next_run_command(mode: str, model_type: str) -> str:
     return command
 
 
-def configure_ready_box_lines(mode: str, model_type: str) -> list[str]:
+def configure_ready_box_lines(
+    mode: str, model_type: str, runtime: str, precision: str
+) -> list[str]:
     return [
         f"{mode} mode is ready for execution!",
-        f"Run: {next_run_command(mode, model_type)}",
+        f"Run: {next_run_command(mode, model_type, runtime, precision)}",
     ]
 
 
@@ -99,8 +108,14 @@ def print_global_help() -> None:
     print("Usage:")
     print("  ./docker/iqf build [--dry-run]")
     print("  ./docker/iqf shell [--dry-run] [--qai-hub] [--adb]")
-    print("  ./docker/iqf configure <qc|mAP|test> --type <type>")
-    print("  ./docker/iqf run <qc|mAP|test> --type <type> [known path flags] [backend flags...]")
+    print(
+        "  ./docker/iqf configure <qc|mAP|test> --type <type> "
+        "--runtime <runtime> --precision <precision>"
+    )
+    print(
+        "  ./docker/iqf run <qc|mAP|test> --type <type> "
+        "--runtime <runtime> --precision <precision> [known path flags] [backend flags...]"
+    )
     print()
     print("Image override:")
     print("  Use IQF_DOCKER_IMAGE or place --image <docker-tag> before the command,")
@@ -111,9 +126,18 @@ def print_global_help() -> None:
     print("Examples:")
     print("  ./docker/iqf build")
     print("  ./docker/iqf shell --adb")
-    print("  ./docker/iqf configure qc --type yolov26")
-    print("  ./docker/iqf run qc --type yolov26 --model /data/model.pt --calib_dir /data/calib")
-    print("  ./docker/iqf run test --type yolov26 --model /data/model.tflite --yaml /data/coco.yaml --image /data/test.jpg")
+    print(
+        "  ./docker/iqf configure qc --type yolov26 "
+        "--runtime litert --precision int8"
+    )
+    print(
+        "  ./docker/iqf run qc --type yolov26 --runtime litert --precision int8 "
+        "--model /data/model.pt --calib_dir /data/calib"
+    )
+    print(
+        "  ./docker/iqf run test --type yolov26 --runtime onnx --precision fp32 "
+        "--model /data/model.onnx --yaml /data/coco.yaml --image /data/test.jpg"
+    )
 
 
 def _extract_option_value(argv: list[str], index: int, option: str) -> tuple[str, int]:
@@ -179,6 +203,84 @@ def print_warnings(warnings: list[str]) -> None:
         print(warning)
 
 
+def _extract_passthrough_option_value(argv: list[str], option: str) -> str | None:
+    for idx, arg in enumerate(argv):
+        if arg == option and idx + 1 < len(argv):
+            return argv[idx + 1]
+        if arg.startswith(f"{option}="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _runtime_precision_required_message() -> str:
+    return (
+        "[error] v0.0.3 requires both --runtime and --precision.\n"
+        "Example:\n"
+        "  ./docker/iqf run qc --type yolov26 --runtime litert --precision int8"
+    )
+
+
+def _deprecated_model_flag_message() -> str:
+    return (
+        "[error] --fp-model and --int-model are deprecated in iQ-Foundry v0.0.3.\n"
+        "Use:\n"
+        "  --reference-model\n"
+        "  --converted-model"
+    )
+
+
+def _supported_matrix_message() -> str:
+    lines = ["Supported combinations:"]
+    for runtime, precision, description in SUPPORTED_RUNTIME_PRECISION_ROWS:
+        lines.append(f"  {runtime:<6} + {precision:<6}  {description}")
+    return "\n".join(lines)
+
+
+def _unsupported_runtime_or_precision_message(
+    runtime: str | None, precision: str | None
+) -> str:
+    if runtime not in RUNTIME_CHOICES:
+        detail = f"Unsupported runtime for iQ-Foundry v0.0.3: {runtime}"
+    else:
+        detail = f"Unsupported precision for iQ-Foundry v0.0.3: {precision}"
+    return f"[error] {detail}\n\n{_supported_matrix_message()}"
+
+
+def _unsupported_runtime_precision_message(runtime: str, precision: str) -> str:
+    return (
+        "[error] Unsupported combination does not exist in iQ-Foundry v0.0.3:\n"
+        f"        runtime={runtime}, precision={precision}\n\n"
+        f"{_supported_matrix_message()}"
+    )
+
+
+def _preflight_runtime_precision_argv(argv: list[str]) -> None:
+    if any(token in {"-h", "--help"} for token in argv):
+        return
+    if any(
+        token == "--fp-model" or token.startswith("--fp-model=")
+        for token in argv
+    ) or any(
+        token == "--int-model" or token.startswith("--int-model=")
+        for token in argv
+    ):
+        raise WrapperError(_deprecated_model_flag_message())
+
+    runtime = _extract_passthrough_option_value(argv, "--runtime")
+    precision = _extract_passthrough_option_value(argv, "--precision")
+    if runtime is None or precision is None:
+        raise WrapperError(_runtime_precision_required_message())
+    if runtime not in RUNTIME_CHOICES or precision not in PRECISION_CHOICES:
+        raise WrapperError(
+            _unsupported_runtime_or_precision_message(runtime, precision)
+        )
+
+
+def _validate_runtime_precision(runtime: str, precision: str) -> None:
+    if (runtime, precision) not in SUPPORTED_RUNTIME_PRECISION_COMBINATIONS:
+        raise WrapperError(_unsupported_runtime_precision_message(runtime, precision))
+
+
 def execute_plan(plan, dry_run: bool) -> int:
     print_warnings(plan.warnings)
     if dry_run:
@@ -216,6 +318,8 @@ def configure_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="./docker/iqf configure", allow_abbrev=False)
     parser.add_argument("mode", choices=MODE_CHOICES)
     parser.add_argument("--type", required=True, choices=MODEL_TYPES)
+    parser.add_argument("--runtime", required=True, choices=RUNTIME_CHOICES)
+    parser.add_argument("--precision", required=True, choices=PRECISION_CHOICES)
     return parser
 
 
@@ -226,6 +330,8 @@ def run_parser(mode: str) -> argparse.ArgumentParser:
     )
     parser.add_argument("mode", choices=MODE_CHOICES)
     parser.add_argument("--type", required=True, choices=MODEL_TYPES)
+    parser.add_argument("--runtime", required=True, choices=RUNTIME_CHOICES)
+    parser.add_argument("--precision", required=True, choices=PRECISION_CHOICES)
     parser.add_argument("--save", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     for field_name, spec in MODE_PATH_SPECS[mode].items():
@@ -239,6 +345,8 @@ def run_command_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="./docker/iqf run", allow_abbrev=False)
     parser.add_argument("mode", nargs="?", choices=MODE_CHOICES)
     parser.add_argument("--type")
+    parser.add_argument("--runtime")
+    parser.add_argument("--precision")
     parser.add_argument("--save", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
@@ -310,7 +418,9 @@ def handle_configure(
     _, repo_root_override = merge_override(
         outer_image, outer_repo_root, inner_image, inner_repo_root
     )
+    _preflight_runtime_precision_argv(remaining)
     args = configure_parser().parse_args(remaining)
+    _validate_runtime_precision(args.runtime, args.precision)
     repo_root = resolve_repo_root(repo_root_override)
     config_path = docker_config_path(repo_root)
     # The prompt text itself stays unchanged; only the wrapper-owned status lines are colorized.
@@ -318,11 +428,20 @@ def handle_configure(
         config_path,
         args.type,
         args.mode,
+        args.runtime,
+        args.precision,
         info_printer=print_info,
         warning_printer=print_warning,
         error_printer=print_error,
     )
-    save_mode_paths(config_path, args.type, args.mode, saved_inputs)
+    save_mode_paths(
+        config_path,
+        args.type,
+        args.mode,
+        args.runtime,
+        args.precision,
+        saved_inputs,
+    )
     print_success(
         f"[ok] saved {args.mode} input paths for {args.type} in {config_path}"
     )
@@ -331,7 +450,14 @@ def handle_configure(
     # The box keeps the guidance minimal and action-oriented. Test mode includes --adb in the
     # next-step hint because that is the common on-device flow, but the flag is still not saved.
     print()
-    print_boxed_summary(configure_ready_box_lines(args.mode, args.type))
+    print_boxed_summary(
+        configure_ready_box_lines(
+            args.mode,
+            args.type,
+            args.runtime,
+            args.precision,
+        )
+    )
     return 0
 
 
@@ -361,6 +487,7 @@ def handle_run(
         repo_root = resolve_repo_root(repo_root_override)
         return dispatch_backend_mode_help(repo_root, mode)
 
+    _preflight_runtime_precision_argv(remaining)
     parser = run_parser(mode)
     # The wrapper only consumes its own controls plus path flags that need host-to-container
     # translation. Everything else stays in passthrough so backend flags are preserved verbatim.
@@ -372,12 +499,15 @@ def handle_run(
     }
     repo_root = resolve_repo_root(repo_root_override)
     image_name = resolve_image_name(image_override)
+    _validate_runtime_precision(args.runtime, args.precision)
 
     plan, saved_inputs = plan_run_command(
         repo_root=repo_root,
         image_name=image_name,
         mode=mode,
         model_type=args.type,
+        runtime=args.runtime,
+        precision=args.precision,
         provided_paths=known_paths,
         passthrough_args=passthrough,
         use_adb=getattr(args, "adb", False),
@@ -387,7 +517,14 @@ def handle_run(
     if args.save and args.dry_run:
         print("[info] --save skipped in dry-run mode.")
     elif args.save:
-        save_mode_paths(docker_config_path(repo_root), args.type, mode, saved_inputs)
+        save_mode_paths(
+            docker_config_path(repo_root),
+            args.type,
+            mode,
+            args.runtime,
+            args.precision,
+            saved_inputs,
+        )
         print(
             f"[ok] saved {mode} input paths for {args.type} in "
             f"{docker_config_path(repo_root)}"

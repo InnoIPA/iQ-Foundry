@@ -33,6 +33,18 @@ DEFAULT_DOCKERFILE = "docker/Dockerfile"
 DOCKER_CONFIG_RELATIVE_PATH = Path(".iqf") / "docker-paths.json"
 MODE_CHOICES = ("qc", "mAP", "test")
 MODEL_TYPES = ("yolov10", "yolov11", "yolov26")
+RUNTIME_CHOICES = ("litert", "onnx")
+PRECISION_CHOICES = ("fp32", "int8", "w8a16")
+SUPPORTED_RUNTIME_PRECISION_ROWS = (
+    ("litert", "int8", "Existing LiteRT/TFLite INT8 path"),
+    ("litert", "fp32", "LiteRT/TFLite FP32 path"),
+    ("onnx", "fp32", "ONNX Runtime FP32 path"),
+    ("onnx", "w8a16", "ONNX Runtime W8A16 path"),
+)
+SUPPORTED_RUNTIME_PRECISION_COMBINATIONS = {
+    (runtime, precision)
+    for runtime, precision, _ in SUPPORTED_RUNTIME_PRECISION_ROWS
+}
 WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WSL_UNC_PATH_RE = re.compile(
     r"^\\\\(?P<host>wsl(?:\.localhost|\$))\\(?P<distro>[^\\]+)(?P<suffix>(?:\\.*)?)$",
@@ -82,9 +94,13 @@ MODE_PATH_SPECS: dict[str, dict[str, PathSpec]] = {
     },
     "mAP": {
         "annotations": PathSpec("--annotations", "file_or_dir", required_input=True),
-        "fp_model": PathSpec("--fp-model", "file", required_input=True),
+        "reference_model": PathSpec(
+            "--reference-model", "file", required_input=True
+        ),
         "images": PathSpec("--images", "dir", required_input=True),
-        "int_model": PathSpec("--int-model", "file", required_input=True),
+        "converted_model": PathSpec(
+            "--converted-model", "file", required_input=True
+        ),
         "output_text": PathSpec("--output_text", "output_file"),
         "remote_runner_local": PathSpec("--remote-runner-local", "file"),
     },
@@ -166,7 +182,64 @@ def normalize_host_path(path_value: str) -> Path:
 
 
 def _empty_config() -> dict:
-    return {"version": 1, "types": {}}
+    return {"version": 2, "types": {}}
+
+
+def _invalid_legacy_config_message(config_path: Path) -> str:
+    return (
+        f"[error] Saved wrapper config at {config_path} is incompatible with iQ-Foundry "
+        "v0.0.3. Re-run './docker/iqf configure <mode> --type <type> --runtime <runtime> "
+        "--precision <precision>' to recreate it."
+    )
+
+
+def _rename_legacy_field(field_name: str) -> str:
+    if field_name == "fp_model":
+        return "reference_model"
+    if field_name == "int_model":
+        return "converted_model"
+    return field_name
+
+
+def _migrate_v1_config(raw: dict, config_path: Path) -> dict:
+    types = raw.get("types")
+    if not isinstance(types, dict):
+        raise WrapperError(_invalid_legacy_config_message(config_path))
+
+    migrated = _empty_config()
+    for model_type, type_entry in types.items():
+        if not isinstance(model_type, str) or not isinstance(type_entry, dict):
+            raise WrapperError(_invalid_legacy_config_message(config_path))
+
+        migrated["types"].setdefault(model_type, {})
+        for mode, mode_entry in type_entry.items():
+            if not isinstance(mode, str) or not isinstance(mode_entry, dict):
+                raise WrapperError(_invalid_legacy_config_message(config_path))
+            raw_paths = mode_entry.get("paths", {})
+            if not isinstance(raw_paths, dict):
+                raise WrapperError(_invalid_legacy_config_message(config_path))
+
+            migrated_paths: dict[str, dict[str, str]] = {}
+            for field_name, payload in raw_paths.items():
+                if not isinstance(payload, dict):
+                    raise WrapperError(_invalid_legacy_config_message(config_path))
+                kind = payload.get("kind")
+                host = payload.get("host")
+                if not isinstance(kind, str) or not isinstance(host, str) or not host.strip():
+                    raise WrapperError(_invalid_legacy_config_message(config_path))
+                migrated_paths[_rename_legacy_field(field_name)] = {
+                    "kind": kind,
+                    "host": host,
+                }
+
+            migrated["types"][model_type][mode] = {
+                "litert": {
+                    "int8": {
+                        "paths": migrated_paths,
+                    }
+                }
+            }
+    return migrated
 
 
 def load_wrapper_config(config_path: Path) -> dict:
@@ -180,31 +253,46 @@ def load_wrapper_config(config_path: Path) -> dict:
 
     if not isinstance(raw, dict):
         raise WrapperError(f"[error] Invalid config format in {config_path}")
-    if raw.get("version") != 1:
+    version = raw.get("version")
+    if version == 1:
+        return _migrate_v1_config(raw, config_path)
+    if version != 2:
         raise WrapperError(f"[error] Unsupported config version in {config_path}")
     if not isinstance(raw.get("types"), dict):
         raise WrapperError(f"[error] Invalid types section in {config_path}")
     return raw
 
 
-def load_saved_mode_paths(config_path: Path, model_type: str, mode: str) -> dict[str, str]:
+def load_saved_mode_paths(
+    config_path: Path,
+    model_type: str,
+    mode: str,
+    runtime: str,
+    precision: str,
+) -> dict[str, str]:
     config = load_wrapper_config(config_path)
     type_entry = config["types"].get(model_type, {})
     mode_entry = type_entry.get(mode, {})
-    raw_paths = mode_entry.get("paths", {})
+    runtime_entry = mode_entry.get(runtime, {})
+    precision_entry = runtime_entry.get(precision, {})
+    raw_paths = precision_entry.get("paths", {})
     if not isinstance(raw_paths, dict):
-        raise WrapperError(f"[error] Invalid saved path data for {model_type}/{mode}")
+        raise WrapperError(
+            f"[error] Invalid saved path data for {model_type}/{mode}/{runtime}/{precision}"
+        )
 
     saved: dict[str, str] = {}
     for field_name, payload in raw_paths.items():
         if not isinstance(payload, dict):
             raise WrapperError(
-                f"[error] Invalid saved path entry for {model_type}/{mode}/{field_name}"
+                "[error] Invalid saved path entry for "
+                f"{model_type}/{mode}/{runtime}/{precision}/{field_name}"
             )
         host = payload.get("host")
         if not isinstance(host, str) or not host.strip():
             raise WrapperError(
-                f"[error] Missing host path for {model_type}/{mode}/{field_name}"
+                "[error] Missing host path for "
+                f"{model_type}/{mode}/{runtime}/{precision}/{field_name}"
             )
         saved[field_name] = host
     return saved
@@ -214,12 +302,16 @@ def save_mode_paths(
     config_path: Path,
     model_type: str,
     mode: str,
+    runtime: str,
+    precision: str,
     saved_inputs: dict[str, tuple[str, str]],
 ) -> None:
     config = load_wrapper_config(config_path)
     config.setdefault("types", {})
     config["types"].setdefault(model_type, {})
-    config["types"][model_type][mode] = {
+    config["types"][model_type].setdefault(mode, {})
+    config["types"][model_type][mode].setdefault(runtime, {})
+    config["types"][model_type][mode][runtime][precision] = {
         "paths": {
             field_name: {"kind": kind, "host": host}
             for field_name, (kind, host) in saved_inputs.items()
@@ -265,6 +357,10 @@ def validate_output_path(path_value: str, kind: str) -> str:
 
 def _persisted_kind(mode: str, field_name: str) -> str:
     return MODE_PATH_SPECS[mode][field_name].kind
+
+
+def qc_requires_calibration(runtime: str, precision: str) -> bool:
+    return not (runtime in {"litert", "onnx"} and precision == "fp32")
 
 
 def merge_required_input_paths(
@@ -316,7 +412,9 @@ def merge_required_input_paths(
     return merged
 
 
-def missing_required_paths(mode: str, merged_inputs: dict[str, str]) -> list[str]:
+def missing_required_paths(
+    mode: str, merged_inputs: dict[str, str], runtime: str, precision: str
+) -> list[str]:
     missing: list[str] = []
     if mode == "test":
         for field_name in ("model", "yaml"):
@@ -329,19 +427,32 @@ def missing_required_paths(mode: str, merged_inputs: dict[str, str]) -> list[str
         return missing
 
     for field_name, spec in MODE_PATH_SPECS[mode].items():
+        if (
+            mode == "qc"
+            and field_name == "calib_dir"
+            and not qc_requires_calibration(runtime, precision)
+        ):
+            continue
         if spec.required_input and not merged_inputs.get(field_name):
             missing.append(spec.flag)
     return missing
 
 
-def missing_required_path_message(mode: str, model_type: str, missing_flags: list[str]) -> str:
+def missing_required_path_message(
+    mode: str,
+    model_type: str,
+    runtime: str,
+    precision: str,
+    missing_flags: list[str],
+) -> str:
     if len(missing_flags) == 1:
         detail = missing_flags[0]
     else:
         detail = ", ".join(missing_flags)
     return (
         f"[error] Missing required path for {mode}: {detail}\n"
-        f"Run: ./docker/iqf configure {mode} --type {model_type}\n"
+        f"Run: ./docker/iqf configure {mode} --type {model_type} "
+        f"--runtime {runtime} --precision {precision}\n"
         f"or pass it directly with the required host-path flags"
     )
 
@@ -452,24 +563,37 @@ def prompt_for_mode_paths(
     config_path: Path,
     model_type: str,
     mode: str,
+    runtime: str,
+    precision: str,
     *,
     info_printer: ConsolePrinter | None = None,
     warning_printer: ConsolePrinter | None = None,
     error_printer: ConsolePrinter | None = None,
 ) -> dict[str, tuple[str, str]]:
-    saved_paths = load_saved_mode_paths(config_path, model_type, mode)
+    saved_paths = load_saved_mode_paths(
+        config_path,
+        model_type,
+        mode,
+        runtime,
+        precision,
+    )
     saved_inputs: dict[str, tuple[str, str]] = {}
 
     prompts = {
         "qc": (
             ("model", "Enter FP model path for qc (--model)"),
-            ("calib_dir", "Enter calibration image directory for qc (--calib_dir)"),
         ),
         "mAP": (
             ("annotations", "Enter annotations path for mAP (--annotations)"),
-            ("fp_model", "Enter FP model path for mAP (--fp-model)"),
+            (
+                "reference_model",
+                "Enter reference model path for mAP (--reference-model)",
+            ),
             ("images", "Enter image directory for mAP (--images)"),
-            ("int_model", "Enter INT model path for mAP (--int-model)"),
+            (
+                "converted_model",
+                "Enter converted model path for mAP (--converted-model)",
+            ),
         ),
     }
 
@@ -482,7 +606,7 @@ def prompt_for_mode_paths(
             error_printer=error_printer,
         )
         test_fields = [
-            ("model", "Enter INT model path for test (--model)"),
+            ("model", "Enter converted model path for test (--model)"),
             ("yaml", "Enter class YAML path for test (--yaml)"),
             (
                 choice,
@@ -507,7 +631,13 @@ def prompt_for_mode_paths(
             )
         return saved_inputs
 
-    for field_name, prompt in prompts[mode]:
+    prompt_fields = prompts[mode]
+    if mode == "qc" and qc_requires_calibration(runtime, precision):
+        prompt_fields = prompt_fields + (
+            ("calib_dir", "Enter calibration image directory for qc (--calib_dir)"),
+        )
+
+    for field_name, prompt in prompt_fields:
         kind = _persisted_kind(mode, field_name)
         saved_inputs[field_name] = (
             kind,
@@ -572,20 +702,33 @@ def dedupe_mounts(mounts: list[MountSpec]) -> list[MountSpec]:
 def build_inner_cli_command(
     mode: str,
     model_type: str,
+    runtime: str,
+    precision: str,
     translated_paths: dict[str, str],
     passthrough_args: list[str],
     use_adb: bool,
 ) -> list[str]:
-    command = ["python3", "cli.py", "--type", model_type, "--mode", mode]
+    command = [
+        "python3",
+        "cli.py",
+        "--type",
+        model_type,
+        "--mode",
+        mode,
+        "--runtime",
+        runtime,
+        "--precision",
+        precision,
+    ]
 
     if mode == "qc":
         ordered_fields = ("model", "calib_dir", "output")
     elif mode == "mAP":
         ordered_fields = (
             "annotations",
-            "fp_model",
+            "reference_model",
             "images",
-            "int_model",
+            "converted_model",
             "output_text",
             "remote_runner_local",
         )
@@ -743,17 +886,33 @@ def plan_run_command(
     image_name: str,
     mode: str,
     model_type: str,
+    runtime: str,
+    precision: str,
     provided_paths: dict[str, str | None],
     passthrough_args: list[str],
     use_adb: bool,
     dry_run: bool,
 ) -> tuple[CommandPlan, dict[str, tuple[str, str]]]:
     config_path = docker_config_path(repo_root)
-    saved_paths = load_saved_mode_paths(config_path, model_type, mode)
+    saved_paths = load_saved_mode_paths(
+        config_path,
+        model_type,
+        mode,
+        runtime,
+        precision,
+    )
     merged_inputs = merge_required_input_paths(mode, model_type, provided_paths, saved_paths)
-    missing_flags = missing_required_paths(mode, merged_inputs)
+    missing_flags = missing_required_paths(mode, merged_inputs, runtime, precision)
     if missing_flags:
-        raise WrapperError(missing_required_path_message(mode, model_type, missing_flags))
+        raise WrapperError(
+            missing_required_path_message(
+                mode,
+                model_type,
+                runtime,
+                precision,
+                missing_flags,
+            )
+        )
 
     translated_paths: dict[str, str] = {}
     mounts = [MountSpec(str(repo_root), REPO_MOUNT_TARGET, False)]
@@ -796,6 +955,8 @@ def plan_run_command(
     inner_command = build_inner_cli_command(
         mode=mode,
         model_type=model_type,
+        runtime=runtime,
+        precision=precision,
         translated_paths=translated_paths,
         passthrough_args=passthrough_args,
         use_adb=use_adb,
