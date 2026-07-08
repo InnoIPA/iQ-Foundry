@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
+import tempfile
+import zipfile
 
 try:
     import numpy as np
@@ -188,10 +191,209 @@ def load_calibration_images(
     return sample_inputs
 
 
+def _finalize_downloaded_onnx_artifact(
+    downloaded_path: str | None,
+    requested_output_path: str,
+) -> str:
+    requested = Path(requested_output_path).expanduser().resolve()
+    candidate = Path(downloaded_path).expanduser().resolve() if downloaded_path else requested
+    requested.parent.mkdir(parents=True, exist_ok=True)
+
+    if zipfile.is_zipfile(candidate):
+        with tempfile.TemporaryDirectory(prefix="yolov10_onnx_artifact_") as tmpdir:
+            tmp_root = Path(tmpdir)
+            with zipfile.ZipFile(candidate) as zf:
+                zf.extractall(tmp_root)
+
+            extracted_model = next(tmp_root.rglob("model.onnx"), None)
+            if extracted_model is None:
+                raise RuntimeError(
+                    "Downloaded ONNX bundle does not contain model.onnx"
+                )
+
+            shutil.copy2(extracted_model, requested)
+            extracted_data = extracted_model.with_name("model.data")
+            if extracted_data.is_file():
+                shutil.copy2(extracted_data, requested.with_name("model.data"))
+        return str(requested)
+
+    if candidate != requested:
+        shutil.copy2(candidate, requested)
+        candidate_data = candidate.with_name("model.data")
+        if candidate_data.is_file():
+            shutil.copy2(candidate_data, requested.with_name("model.data"))
+    return str(requested)
+
+
 # ----------------------------
 # Pipeline
 # ----------------------------
 class YoloV10Pipeline:
+    def convert(
+        self,
+        model_path: str,
+        output_path: str,
+        runtime: str,
+        precision: str,
+        calib_dir: str,
+        max_calib: int = 200,
+        qc_head: str = "one2many",
+        qc_quant_scheme: str = "mse",
+    ) -> None:
+        if runtime == "litert" and precision == "int8":
+            self.quantize_convert(
+                model_path=model_path,
+                out_tflite=output_path,
+                calib_dir=calib_dir,
+                max_calib=max_calib,
+                qc_head=qc_head,
+                qc_quant_scheme=qc_quant_scheme,
+            )
+            return
+        if runtime == "litert" and precision == "fp32":
+            self.export_tflite_fp32(
+                model_path=model_path,
+                output_path=output_path,
+                qc_head=qc_head,
+            )
+            return
+        if runtime == "onnx" and precision == "fp32":
+            self.export_onnx_fp32(
+                model_path=model_path,
+                output_path=output_path,
+                qc_head=qc_head,
+            )
+            return
+        if runtime == "onnx" and precision == "w8a16":
+            self.export_onnx_w8a16(
+                model_path=model_path,
+                output_path=output_path,
+                calib_dir=calib_dir,
+                max_calib=max_calib,
+                qc_head=qc_head,
+                qc_quant_scheme=qc_quant_scheme,
+            )
+            return
+        raise ValueError(f"Unsupported runtime/precision: {runtime}/{precision}")
+
+    def _build_traced_model(self, model_path: str, qc_head: str):
+        _require_qc_deps()
+        assert torch is not None and YOLO is not None
+
+        input_hw = 640
+        input_shape = (1, input_hw, input_hw, 3)
+        y = YOLO(model_path)
+        core = y.model.eval()
+        torch_model = Yolo10RawBranchWrapper(core, branch_key=qc_head).eval()
+        example = torch.rand(input_shape, dtype=torch.float32)
+        pt_model = torch.jit.trace(
+            torch_model, example, strict=False, check_trace=False
+        )
+        return pt_model, input_hw, input_shape
+
+    def export_onnx_fp32(
+        self,
+        model_path: str,
+        output_path: str,
+        qc_head: str = "one2many",
+    ) -> None:
+        if qc_head not in ("one2many", "one2one"):
+            raise ValueError(f"Unsupported qc_head for yolov10: {qc_head}")
+        _require_qc_deps()
+        assert hub is not None
+
+        pt_model, _, input_shape = self._build_traced_model(model_path, qc_head)
+        device = hub.Device("Dragonwing IQ-9075 EVK")
+        compile_job = hub.submit_compile_job(
+            model=pt_model,
+            device=device,
+            input_specs={"image": input_shape},
+            options="--target_runtime onnx",
+        )
+        downloaded_path = compile_job.download_target_model(str(output_path))
+        final_path = _finalize_downloaded_onnx_artifact(downloaded_path, output_path)
+        print(f"[yolov10] wrote onnx: {final_path}")
+
+    def export_tflite_fp32(
+        self,
+        model_path: str,
+        output_path: str,
+        qc_head: str = "one2many",
+    ) -> None:
+        if qc_head not in ("one2many", "one2one"):
+            raise ValueError(f"Unsupported qc_head for yolov10: {qc_head}")
+        _require_qc_deps()
+        assert hub is not None
+
+        pt_model, _, input_shape = self._build_traced_model(model_path, qc_head)
+        device = hub.Device("Dragonwing IQ-9075 EVK")
+        compile_onnx_job = hub.submit_compile_job(
+            model=pt_model,
+            device=device,
+            input_specs={"image": input_shape},
+            options="--target_runtime onnx",
+        )
+        unquantized_onnx_model = compile_onnx_job.get_target_model()
+
+        output_path = str(output_path)
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        compile_tflite_job = hub.submit_compile_job(
+            model=unquantized_onnx_model,
+            device=device,
+            options="--target_runtime tflite",
+        )
+        compile_tflite_job.download_target_model(output_path)
+        print(f"[yolov10] wrote tflite: {output_path}")
+
+    def export_onnx_w8a16(
+        self,
+        model_path: str,
+        output_path: str,
+        calib_dir: str,
+        max_calib: int = 200,
+        qc_head: str = "one2many",
+        qc_quant_scheme: str = "mse",
+    ) -> None:
+        if qc_head not in ("one2many", "one2one"):
+            raise ValueError(f"Unsupported qc_head for yolov10: {qc_head}")
+        if qc_quant_scheme not in ("mse", "minmax"):
+            raise ValueError(f"Unsupported qc_quant_scheme: {qc_quant_scheme}")
+        _require_qc_deps()
+        assert hub is not None
+
+        pt_model, input_hw, input_shape = self._build_traced_model(model_path, qc_head)
+        device = hub.Device("Dragonwing IQ-9075 EVK")
+        compile_onnx_job = hub.submit_compile_job(
+            model=pt_model,
+            device=device,
+            input_specs={"image": input_shape},
+            options="--target_runtime onnx",
+        )
+        unquantized_onnx_model = compile_onnx_job.get_target_model()
+
+        sample_inputs = load_calibration_images(
+            calib_dir, input_hw, max_images=max_calib
+        )
+        quantize_kwargs = {
+            "model": unquantized_onnx_model,
+            "calibration_data": {"image": sample_inputs},
+            "weights_dtype": hub.QuantizeDtype.INT8,
+            "activations_dtype": hub.QuantizeDtype.INT16,
+        }
+        if qc_quant_scheme == "minmax":
+            quantize_kwargs["options"] = "--range_scheme min_max"
+        quantize_job = hub.submit_quantize_job(**quantize_kwargs)
+        quantized_onnx_model = quantize_job.get_target_model()
+
+        compile_quantized_job = hub.submit_compile_job(
+            model=quantized_onnx_model,
+            device=device,
+            options="--target_runtime onnx --quantize_io",
+        )
+        downloaded_path = compile_quantized_job.download_target_model(str(output_path))
+        final_path = _finalize_downloaded_onnx_artifact(downloaded_path, output_path)
+        print(f"[yolov10] wrote onnx: {final_path}")
+
     def quantize_convert(
         self,
         model_path: str,

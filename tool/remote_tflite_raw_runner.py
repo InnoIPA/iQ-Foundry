@@ -123,6 +123,27 @@ def main():
 
     for in_file in input_files:
         x = np.load(in_file)
+        expected_dtype = np.dtype(input_detail["dtype"])
+        expected_shape = tuple(int(v) for v in input_detail["shape"])
+        if tuple(int(v) for v in x.shape) != expected_shape:
+            raise RuntimeError(
+                f"Input tensor shape mismatch for {in_file.name}: "
+                f"expected {expected_shape}, got {tuple(int(v) for v in x.shape)}"
+            )
+        if x.dtype != expected_dtype:
+            if np.issubdtype(x.dtype, np.floating) and np.issubdtype(
+                expected_dtype, np.floating
+            ):
+                x = x.astype(expected_dtype, copy=False)
+            elif np.issubdtype(x.dtype, np.integer) and np.issubdtype(
+                expected_dtype, np.integer
+            ):
+                x = x.astype(expected_dtype, copy=False)
+            else:
+                raise RuntimeError(
+                    f"Input tensor dtype mismatch for {in_file.name}: "
+                    f"expected {expected_dtype}, got {x.dtype}"
+                )
         interpreter.set_tensor(input_detail["index"], x)
         interpreter.invoke()
 

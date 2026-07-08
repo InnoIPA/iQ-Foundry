@@ -12,7 +12,14 @@
 
 ![Repository overview](./docs/Images/overall-workflow.png)
 
-`iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible computer vision `.pt` models into `.tflite` artifacts, validating FP-versus-quantized quality with mAP@0.5, and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
+<p align="center">
+  <img src="docs/Images/litert-logo.png" alt="LiteRT" style="height: 42px; width: auto; vertical-align: middle;">
+  <img src="docs/Images/ort-logo.png" alt="ONNX Runtime" style="height: 38px; width: auto; vertical-align: middle;">
+  <br>
+  <strong>New in v0.0.3:</strong> FP32 and mixed-precision deployment support!!
+</p>
+
+`iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible computer vision `.pt` models into `.tflite` and `.onnx` artifacts, validating reference-versus-converted quality with mAP@0.5, and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
 
 `iQ-Foundry` supports a Bring Your Own Model workflow. You can use your own compatible `yolov10`, `yolov11`, or `yolov26`  models with the pipeline. If you need pretrained YOLO weights, you can download official pretrained models from [Ultralytics](https://docs.ultralytics.com/).
 
@@ -94,40 +101,75 @@
     <thead>
       <tr>
         <th>Category</th>
-        <th>Current Support</th>
-        <th>Upcoming</th>
+        <th>Support</th>
       </tr>
     </thead>
     <tbody>
       <tr>
         <td>Input Format</td>
         <td><code>.pt</code></td>
-        <td>-</td>
       </tr>
       <tr>
         <td>Model Families</td>
         <td><code>yolov10</code>, <code>yolov11</code>, <code>yolov26</code></td>
-        <td>-</td>
       </tr>
       <tr>
         <td>Quantization</td>
-        <td><code>INT8 (W8A8)</code></td>
-        <td><code>W8A16</code>, <code>FP16</code>, <code>FP32</code></td>
+        <td><code>FP32 (float)</code>, <code>INT8 (W8A8)</code>, <code>W8A16 (INT mixed precision)</code></td>
       </tr>
       <tr>
         <td>Target Device</td>
         <td><a href="https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911">EXMP-Q911 (Qualcomm QCS9075)</a></td>
-        <td>-</td>
       </tr>
       <tr>
         <td>Runtime</td>
-        <td><code>TensorFlow Lite</code></td>
-        <td><code>ONNX Runtime</code></td>
+        <td>
+          <table>
+            <tr>
+              <td align="center">
+                <img src="docs/Images/litert-logo.png" alt="LiteRT" height="24"><br>
+                <code>LiteRT (TensorFlow Lite)</code>
+              </td>
+              <td align="center">
+                <img src="docs/Images/ort-logo.png" alt="ONNX Runtime" height="24"><br>
+                <code>ONNX Runtime</code>
+              </td>
+            </tr>
+          </table>
+        </td>
       </tr>
       <tr>
         <td>Backend</td>
         <td><code>NPU (Qualcomm HTP)</code>, <code>CPU</code></td>
-        <td>-</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<p><strong>Runtime and Precision Support Matrix</strong></p>
+
+<div align="center">
+  <table>
+    <thead>
+      <tr>
+        <th>Runtime</th>
+        <th><code>FP32</code></th>
+        <th><code>INT8</code></th>
+        <th><code>W8A16</code></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>LiteRT</code></td>
+        <td align="center">✓</td>
+        <td align="center">✓</td>
+        <td align="center">✗</td>
+      </tr>
+      <tr>
+        <td><code>ONNX Runtime</code></td>
+        <td align="center">✓</td>
+        <td align="center">✗</td>
+        <td align="center">✓</td>
       </tr>
     </tbody>
   </table>

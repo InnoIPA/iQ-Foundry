@@ -31,6 +31,25 @@ try:
 except ModuleNotFoundError:
     from adb_runtime_bootstrap import ensure_adb_runtime_venv
 
+try:
+    from tool.onnx_inference import (
+        ADBORTRawModel,
+        DEFAULT_ORT_QNN_WHEEL,
+        ORTRawModel,
+        load_onnx_model_metadata,
+        prepare_shared_onnx_inputs,
+        resolve_onnx_model_artifact,
+    )
+except ModuleNotFoundError:
+    from onnx_inference import (
+        ADBORTRawModel,
+        DEFAULT_ORT_QNN_WHEEL,
+        ORTRawModel,
+        load_onnx_model_metadata,
+        prepare_shared_onnx_inputs,
+        resolve_onnx_model_artifact,
+    )
+
 DEFAULT_REMOTE_RUNNER_LOCAL = str(
     Path(__file__).resolve().parent / "remote_tflite_raw_runner.py"
 )
@@ -461,7 +480,19 @@ ANCHOR_CENTERS_8400, STRIDES_8400 = make_anchors_8400(640)
 
 
 def sigmoid(x: np.ndarray) -> np.ndarray:
+    x = x.astype(np.float32, copy=False)
+    x = np.clip(x, -80.0, 80.0)
     return 1.0 / (1.0 + np.exp(-x))
+
+
+def _maybe_dequant_onnx_output(
+    arr: np.ndarray, quant_params
+) -> np.ndarray:
+    if quant_params is None:
+        return arr.astype(np.float32, copy=False)
+    return (arr.astype(np.float32) - float(quant_params.zero_point)) * float(
+        quant_params.scale
+    )
 
 
 def letterbox(im: Image.Image, new_shape=(640, 640), color=(114, 114, 114)):
@@ -827,8 +858,12 @@ def postprocess_raw(
     conf_thr: float,
     nms_thr: float,
     max_det: int,
+    box_quant=None,
+    class_quant=None,
 ) -> np.ndarray:
     boxes_c_n, scores_c_n = normalize_raw_pair(boxes_raw, scores_raw)
+    boxes_c_n = _maybe_dequant_onnx_output(boxes_c_n, box_quant)
+    scores_c_n = _maybe_dequant_onnx_output(scores_c_n, class_quant)
     probs = ensure_probs(scores_c_n)
 
     if decoder == "dfl16":
@@ -903,7 +938,7 @@ class PTRawModel:
             raise RuntimeError(
                 f"Unsupported FP output structure for family={self.family}: "
                 f"type={type(y)}. "
-                "This may indicate an incompatible --type and --fp-model pair."
+                "This may indicate an incompatible --type and --reference-model pair."
             )
 
         if self.family in ("yolo10", "yolo26"):
@@ -1072,36 +1107,105 @@ class ADBTFLiteRawModel:
             self._tmpdir_obj.cleanup()
 
 
-def coco_category_ids(ann_path: Path) -> list[int]:
-    data = json.loads(ann_path.read_text())
-    cats = sorted(data["categories"], key=lambda x: x["id"])
-    return [int(c["id"]) for c in cats]
+def build_model_class_to_coco_category_id_map(
+    annotation_coco_json_path: Path,
+    reference_class_names: list[str],
+) -> dict[int, int]:
+    data = json.loads(annotation_coco_json_path.read_text())
+    categories = data.get("categories")
+    if not isinstance(categories, list):
+        raise RuntimeError(
+            "Resolved COCO annotations are missing a valid 'categories' list."
+        )
+
+    reference_name_to_index: dict[str, int] = {}
+    for class_index, class_name in enumerate(reference_class_names):
+        normalized_name = str(class_name).strip()
+        if not normalized_name:
+            raise RuntimeError(
+                f"Reference model class at index {class_index} has an empty name."
+            )
+        if normalized_name in reference_name_to_index:
+            raise RuntimeError(
+                "Duplicate reference model class name "
+                f"'{normalized_name}' found. Name-based category mapping would be ambiguous."
+            )
+        reference_name_to_index[normalized_name] = class_index
+
+    annotation_name_to_id: dict[str, int] = {}
+    seen_category_ids: set[int] = set()
+    for category in categories:
+        if not isinstance(category, dict):
+            raise RuntimeError("Each COCO category entry must be a JSON object.")
+
+        raw_category_id = category.get("id")
+        raw_category_name = category.get("name")
+        try:
+            category_id = int(raw_category_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"Malformed COCO category id: {raw_category_id!r}"
+            ) from exc
+        if isinstance(raw_category_id, float) and not raw_category_id.is_integer():
+            raise RuntimeError(f"Malformed COCO category id: {raw_category_id!r}")
+        if category_id in seen_category_ids:
+            raise RuntimeError(
+                f"Duplicate annotation category id '{category_id}' found in COCO categories."
+            )
+        seen_category_ids.add(category_id)
+        if isinstance(raw_category_name, str):
+            category_name = raw_category_name.strip()
+        else:
+            category_name = ""
+        if not category_name:
+            raise RuntimeError(
+                f"Malformed COCO category name for category id {category_id}: {raw_category_name!r}"
+            )
+        if category_name in annotation_name_to_id:
+            raise RuntimeError(
+                f"Duplicate annotation category name '{category_name}' found in COCO categories."
+            )
+        if category_name not in reference_name_to_index:
+            raise RuntimeError(
+                f"Annotation category '{category_name}' does not exist in reference model classes."
+            )
+        annotation_name_to_id[category_name] = category_id
+
+    return {
+        reference_name_to_index[category_name]: category_id
+        for category_name, category_id in annotation_name_to_id.items()
+    }
 
 
 def dets_to_coco_json(
-    dets: np.ndarray, image_id: int, cat_ids: list[int]
-) -> list[dict]:
+    dets: np.ndarray,
+    image_id: int,
+    model_class_to_category_id: dict[int, int],
+) -> tuple[list[dict], int]:
     if dets.shape[0] == 0:
-        return []
+        return [], 0
     boxes = xyxy_to_xywh(dets[:, :4])
     out = []
+    skipped_unmapped = 0
     for i in range(dets.shape[0]):
         cls = int(dets[i, 5])
-        if cls < 0 or cls >= len(cat_ids):
+        if cls < 0:
             raise RuntimeError(
-                "Prediction class id out of range for evaluation categories: "
-                f"class_id={cls}, categories={len(cat_ids)}. "
-                "Check FP/INT model class counts and annotation categories."
+                f"Prediction class id must be >= 0, got {cls}."
             )
+        category_id = model_class_to_category_id.get(cls)
+        if category_id is None:
+            skipped_unmapped += 1
+            continue
         out.append(
             {
                 "image_id": int(image_id),
-                "category_id": int(cat_ids[cls]),
+                "category_id": int(category_id),
                 "bbox": [float(v) for v in boxes[i].tolist()],
                 "score": float(dets[i, 4]),
             }
         )
-    return out
+    return out, skipped_unmapped
 
 
 def eval_map50(
@@ -1130,39 +1234,42 @@ def eval_map50(
 
 
 def validate_eval_class_count_compatibility(
-    fp_model_path: Path,
-    int_model_path: Path,
-    cat_ids: list[int],
+    reference_class_names: list[str],
+    converted_model_path: Path,
+    model_type: str,
+    runtime: str,
+    precision: str,
 ) -> None:
-    fp_class_count = len(load_fp_model_class_names(fp_model_path))
-    int_class_count = _extract_tflite_class_count(int_model_path)
-    annotation_class_count = len(cat_ids)
-
-    if annotation_class_count != fp_class_count:
+    fp_class_count = len(reference_class_names)
+    if runtime == "litert":
+        candidate_class_count = _extract_tflite_class_count(converted_model_path)
+    elif runtime == "onnx":
+        candidate_class_count = load_onnx_model_metadata(
+            str(converted_model_path),
+            model_type=model_type,
+            precision=precision,
+        ).class_count
+    else:
+        raise RuntimeError(f"Unsupported runtime for class-count validation: {runtime}")
+    if candidate_class_count != fp_class_count:
         raise RuntimeError(
-            "Annotation category count mismatch: "
-            f"annotations define {annotation_class_count} categories, "
-            f"but FP model defines {fp_class_count} classes."
-        )
-    if int_class_count != fp_class_count:
-        raise RuntimeError(
-            "FP/INT class count mismatch: "
-            f"FP model defines {fp_class_count} classes, "
-            f"but INT model outputs {int_class_count}."
+            "Converted model class count mismatch: "
+            f"reference model defines {fp_class_count} classes, "
+            f"but converted model outputs {candidate_class_count}."
         )
 
 
-def build_model_runner(cfg: dict, args, shared_int8=None):
+def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
     if cfg["backend"] == "pt":
         return PTRawModel(cfg["path"], cfg["family"], cfg["head"])
 
     if cfg["backend"] == "tflite":
-        if args.int8_on_device:
-            if shared_int8 is None:
+        if args.candidate_on_device:
+            if shared_candidate_inputs is None:
                 raise RuntimeError(
-                    "shared_int8 cache is required for on-device INT8 mode"
+                    "shared candidate inputs are required for on-device LiteRT mode"
                 )
-            print("INT8 inference mode: IQ9 via adb")
+            print(f"LiteRT {cfg.get('quant', 'fp32')} inference mode: IQ9 via adb")
             return ADBTFLiteRawModel(
                 model_path=cfg["path"],
                 adb_serial=args.adb_serial,
@@ -1172,10 +1279,40 @@ def build_model_runner(cfg: dict, args, shared_int8=None):
                 qnn_lib=args.qnn_lib,
                 backend=args.backend,
                 no_qnn=args.no_qnn,
-                shared_remote_input_dir=shared_int8["remote_input_dir"],
-                shared_meta=shared_int8["meta"],
+                shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
+                shared_meta=shared_candidate_inputs["meta"],
             )
         return TFLiteRawModel(cfg["path"])
+
+    if cfg["backend"] == "onnx":
+        if args.candidate_on_device:
+            if shared_candidate_inputs is None:
+                raise RuntimeError(
+                    "shared candidate inputs are required for on-device ONNX mode"
+                )
+            print(f"{cfg['quant']} ONNX inference mode: IQ9 via adb")
+            return ADBORTRawModel(
+                model_path=cfg["path"],
+                model_type=cfg["model_type"],
+                precision=cfg["quant"],
+                adb_serial=args.adb_serial,
+                remote_workdir=args.remote_workdir,
+                remote_runner=args.remote_runner_remote,
+                remote_python=args.remote_python,
+                qnn_lib=args.qnn_lib,
+                backend=args.backend,
+                no_qnn=args.no_qnn,
+                shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
+                shared_meta=shared_candidate_inputs["meta"],
+            )
+        return ORTRawModel(
+            model_path=cfg["path"],
+            model_type=cfg["model_type"],
+            precision=cfg["quant"],
+            qnn_lib=args.qnn_lib,
+            backend=args.backend,
+            no_qnn=args.no_qnn,
+        )
 
     raise ValueError(cfg["backend"])
 
@@ -1193,20 +1330,25 @@ def evaluate_one_model(
     model_key: str,
     cfg: dict,
     images: list[ImageRec],
-    cat_ids: list[int],
+    model_class_to_category_id: dict[int, int],
     ann_path: Path,
     outdir: Path | None,
     conf_thr: float,
     nms_thr: float,
     max_det: int,
     args,
-    shared_int8=None,
+    shared_candidate_inputs=None,
     save_pred_json: bool = True,
 ) -> dict:
-    runner = build_model_runner(cfg, args, shared_int8=shared_int8)
+    runner = build_model_runner(
+        cfg,
+        args,
+        shared_candidate_inputs=shared_candidate_inputs,
+    )
     all_preds = []
+    skipped_unmapped_predictions = 0
 
-    is_adb_batch = isinstance(runner, ADBTFLiteRawModel)
+    is_adb_batch = isinstance(runner, (ADBTFLiteRawModel, ADBORTRawModel))
     print(_format_run_location(model_key, cfg, is_adb_batch))
 
     if is_adb_batch:
@@ -1214,6 +1356,12 @@ def evaluate_one_model(
         runner.prepare_batch(images)
 
     try:
+        candidate_box_quant = None
+        candidate_class_quant = None
+        if cfg["backend"] == "onnx":
+            candidate_meta = getattr(runner, "meta", None)
+            candidate_box_quant = getattr(candidate_meta, "box_quant", None)
+            candidate_class_quant = getattr(candidate_meta, "class_quant", None)
         for idx, rec in enumerate(images, 1):
             if is_adb_batch:
                 boxes, scores, ratio, padw, padh, orig_size = (
@@ -1233,8 +1381,16 @@ def evaluate_one_model(
                 conf_thr=conf_thr,
                 nms_thr=nms_thr,
                 max_det=max_det,
+                box_quant=candidate_box_quant,
+                class_quant=candidate_class_quant,
             )
-            all_preds.extend(dets_to_coco_json(dets, rec.image_id, cat_ids))
+            pred_rows, skipped_unmapped = dets_to_coco_json(
+                dets,
+                rec.image_id,
+                model_class_to_category_id,
+            )
+            all_preds.extend(pred_rows)
+            skipped_unmapped_predictions += skipped_unmapped
 
             if idx % 100 == 0:
                 print(f"[{model_key}] processed {idx}/{len(images)} images")
@@ -1242,6 +1398,14 @@ def evaluate_one_model(
     finally:
         if is_adb_batch:
             runner.cleanup()
+        elif hasattr(runner, "cleanup"):
+            runner.cleanup()
+
+    if skipped_unmapped_predictions > 0:
+        print(
+            f"[info] {model_key}: skipped {skipped_unmapped_predictions} predictions "
+            "for classes not present in the annotation categories."
+        )
 
     out_json_str = None
     if save_pred_json:
@@ -1307,9 +1471,10 @@ def make_runtime_args(
     qnn_lib: str,
     backend: str,
     no_qnn: bool,
+    candidate_on_device: bool = True,
 ):
     return argparse.Namespace(
-        int8_on_device=True,
+        candidate_on_device=candidate_on_device,
         adb_serial=adb_serial,
         remote_workdir=remote_workdir,
         remote_runner_remote=remote_runner_remote,
@@ -1329,7 +1494,7 @@ def _resolve_remote_base_dir(remote_workdir: str) -> str:
 
 def make_map_remote_run_layout(
     remote_workdir: str,
-    int_model_path: Path,
+    converted_model_path: Path,
     remote_runner_remote: str,
 ) -> dict[str, str]:
     remote_root = _resolve_remote_base_dir(remote_workdir)
@@ -1339,7 +1504,7 @@ def make_map_remote_run_layout(
     return {
         "remote_root": remote_root,
         "remote_run_dir": remote_run_dir,
-        "remote_model": f"{remote_run_dir}/{int_model_path.name}",
+        "remote_model": f"{remote_run_dir}/{converted_model_path.name}",
         "remote_runner": f"{remote_run_dir}/{remote_runner_name}",
         "remote_input_dir": f"{remote_run_dir}/inputs",
     }
@@ -1347,36 +1512,40 @@ def make_map_remote_run_layout(
 
 def make_report_text(
     model_type: str,
+    runtime: str,
+    precision: str,
     fp_head: str,
     annotations: Path,
     images: Path,
     image_count: int,
-    fp_model: str,
-    int_model: str,
-    fp_map50: float,
-    int_map50: float,
+    reference_model: str,
+    converted_model: str,
+    reference_map50: float,
+    converted_map50: float,
     abs_delta: float,
     pct_delta: float | None,
     trend: str,
 ) -> str:
     if pct_delta is None:
-        pct_delta_str = "N/A (FP mAP@0.5 is 0.0)"
+        pct_delta_str = "N/A (reference mAP@0.5 is 0.0)"
     else:
         pct_delta_str = f"{pct_delta:+.2f}%"
 
     lines = [
-        "FP vs INT mAP@0.5 Pair Evaluation",
+        "Reference vs Converted mAP@0.5 Pair Evaluation",
         f"model_type: {model_type}",
+        f"runtime: {runtime}",
+        f"precision: {precision}",
         f"fp_head: {fp_head}",
         f"annotations: {annotations}",
         f"images: {images}",
         f"num_images: {image_count}",
-        f"fp_model: {fp_model}",
-        f"int_model: {int_model}",
-        f"fp_map50: {fp_map50:.6f}",
-        f"int_map50: {int_map50:.6f}",
-        f"abs_delta_int_minus_fp: {abs_delta:+.6f}",
-        f"pct_delta_vs_fp: {pct_delta_str}",
+        f"reference_model: {reference_model}",
+        f"converted_model: {converted_model}",
+        f"reference_map50: {reference_map50:.6f}",
+        f"converted_map50: {converted_map50:.6f}",
+        f"abs_delta_converted_minus_reference: {abs_delta:+.6f}",
+        f"pct_delta_vs_reference: {pct_delta_str}",
         f"trend: {trend}",
     ]
     return "\n".join(lines) + "\n"
@@ -1408,27 +1577,30 @@ def _validate_pair_eval_inputs(
 def _build_model_cfgs(
     model_type: str,
     fp_head: str,
-    fp_model_path: Path,
-    int_model_path: Path,
+    runtime: str,
+    precision: str,
+    reference_model_path: Path,
+    converted_model_path: Path,
 ) -> tuple[dict, dict]:
     decoder = model_decoder_for_type(model_type)
     family = model_type.replace("v", "")
-    fp_cfg = {
+    reference_cfg = {
         "backend": "pt",
         "family": family,
         "head": fp_head_to_cfg_head(model_type, fp_head),
         "decoder": decoder,
-        "path": str(fp_model_path),
+        "path": str(reference_model_path),
     }
-    int_cfg = {
-        "backend": "tflite",
+    candidate_cfg = {
+        "backend": "tflite" if runtime == "litert" else "onnx",
         "family": family,
         "head": "default",
-        "quant": "int8",
+        "model_type": model_type,
+        "quant": precision,
         "decoder": decoder,
-        "path": str(int_model_path),
+        "path": str(converted_model_path),
     }
-    return fp_cfg, int_cfg
+    return reference_cfg, candidate_cfg
 
 
 def _load_tflite_input_detail(int_model_path: Path) -> dict:
@@ -1459,10 +1631,12 @@ def _compute_delta_summary(
     return abs_delta, pct_delta, trend
 
 
-def run_fp_int_pair_map_eval(
+def run_pair_map_eval(
     model_type: str,
-    fp_model: str,
-    int_model: str,
+    reference_model: str,
+    converted_model: str,
+    runtime: str,
+    precision: str,
     annotations: str,
     images: str,
     output_text: str,
@@ -1483,20 +1657,25 @@ def run_fp_int_pair_map_eval(
 ) -> dict:
     ann_path = Path(annotations)
     img_dir = Path(images)
-    fp_model_path = Path(fp_model)
-    int_model_path = Path(int_model)
+    reference_model_path = Path(reference_model)
+    converted_model_path = Path(converted_model)
+    onnx_candidate_artifact = None
+    effective_converted_model_path = converted_model_path
+    if runtime == "onnx":
+        onnx_candidate_artifact = resolve_onnx_model_artifact(str(converted_model_path))
+        effective_converted_model_path = Path(onnx_candidate_artifact.model_path)
     remote_runner_local_path = Path(remote_runner_local)
     fp_head = _validate_pair_eval_inputs(
         model_type=model_type,
         fp_head=fp_head,
         ann_path=ann_path,
         img_dir=img_dir,
-        fp_model_path=fp_model_path,
-        int_model_path=int_model_path,
+        fp_model_path=reference_model_path,
+        int_model_path=converted_model_path,
         remote_runner_local_path=remote_runner_local_path,
     )
     resolved_annotations = resolve_annotations_for_map(
-        ann_path, img_dir, fp_model_path
+        ann_path, img_dir, reference_model_path
     )
 
     local_target_requirements = str(
@@ -1505,10 +1684,13 @@ def run_fp_int_pair_map_eval(
     remote_python = ensure_adb_runtime_venv(
         adb_serial=adb_serial,
         local_requirements_path=local_target_requirements,
+        local_ort_qnn_wheel_path=(
+            DEFAULT_ORT_QNN_WHEEL if runtime == "onnx" else None
+        ),
     )
     remote_layout = make_map_remote_run_layout(
         remote_workdir=remote_workdir,
-        int_model_path=int_model_path,
+        converted_model_path=effective_converted_model_path,
         remote_runner_remote=remote_runner_remote,
     )
 
@@ -1520,6 +1702,7 @@ def run_fp_int_pair_map_eval(
         qnn_lib=qnn_lib,
         backend=backend,
         no_qnn=no_qnn,
+        candidate_on_device=True,
     )
 
     adb_shell(adb_serial, f"mkdir -p {shlex.quote(remote_layout['remote_run_dir'])}")
@@ -1539,64 +1722,90 @@ def run_fp_int_pair_map_eval(
                 "Check --images path and --max-images value."
             )
 
-        cat_ids = coco_category_ids(eval_ann_path)
-        validate_eval_class_count_compatibility(
-            fp_model_path=fp_model_path,
-            int_model_path=int_model_path,
-            cat_ids=cat_ids,
+        reference_class_names = load_fp_model_class_names(reference_model_path)
+        model_class_to_category_id = build_model_class_to_coco_category_id_map(
+            eval_ann_path,
+            reference_class_names,
         )
-        fp_cfg, int_cfg = _build_model_cfgs(
+        validate_eval_class_count_compatibility(
+            reference_class_names=reference_class_names,
+            converted_model_path=effective_converted_model_path,
+            model_type=model_type,
+            runtime=runtime,
+            precision=precision,
+        )
+        reference_cfg, candidate_cfg = _build_model_cfgs(
             model_type=model_type,
             fp_head=fp_head,
-            fp_model_path=fp_model_path,
-            int_model_path=int_model_path,
+            runtime=runtime,
+            precision=precision,
+            reference_model_path=reference_model_path,
+            converted_model_path=effective_converted_model_path,
         )
-        input_detail = _load_tflite_input_detail(int_model_path)
-
-        shared_inputs_obj, shared_meta = prepare_shared_int8_inputs(
-            images=imgs,
-            input_detail=input_detail,
-            adb_serial=adb_serial,
-            remote_input_dir=remote_layout["remote_input_dir"],
-        )
-        shared_int8 = {
-            "meta": shared_meta,
-            "remote_input_dir": remote_layout["remote_input_dir"],
-        }
+        if runtime == "litert":
+            input_detail = _load_tflite_input_detail(converted_model_path)
+            shared_inputs_obj, shared_meta = prepare_shared_int8_inputs(
+                images=imgs,
+                input_detail=input_detail,
+                adb_serial=adb_serial,
+                remote_input_dir=remote_layout["remote_input_dir"],
+            )
+            shared_candidate_inputs = {
+                "meta": shared_meta,
+                "remote_input_dir": remote_layout["remote_input_dir"],
+            }
+        elif runtime == "onnx":
+            shared_inputs_obj, shared_meta, _, _ = prepare_shared_onnx_inputs(
+                images=imgs,
+                model_path=str(effective_converted_model_path),
+                model_type=model_type,
+                precision=precision,
+                adb_serial=adb_serial,
+                remote_input_dir=remote_layout["remote_input_dir"],
+                artifact=onnx_candidate_artifact,
+            )
+            shared_candidate_inputs = {
+                "meta": shared_meta,
+                "remote_input_dir": remote_layout["remote_input_dir"],
+            }
+        else:
+            raise RuntimeError(f"Unsupported runtime: {runtime}")
 
         try:
-            fp_row = evaluate_one_model(
-                model_key=f"{model_type}_fp",
-                cfg=fp_cfg,
+            reference_row = evaluate_one_model(
+                model_key=f"{model_type}_reference",
+                cfg=reference_cfg,
                 images=imgs,
-                cat_ids=cat_ids,
+                model_class_to_category_id=model_class_to_category_id,
                 ann_path=eval_ann_path,
                 outdir=None,
                 conf_thr=conf,
                 nms_thr=nms,
                 max_det=max_det,
                 args=runtime_args,
-                shared_int8=None,
+                shared_candidate_inputs=None,
                 save_pred_json=False,
             )
-            int_row = evaluate_one_model(
-                model_key=f"{model_type}_int",
-                cfg=int_cfg,
+            converted_row = evaluate_one_model(
+                model_key=f"{model_type}_converted",
+                cfg=candidate_cfg,
                 images=imgs,
-                cat_ids=cat_ids,
+                model_class_to_category_id=model_class_to_category_id,
                 ann_path=eval_ann_path,
                 outdir=None,
                 conf_thr=conf,
                 nms_thr=nms,
                 max_det=max_det,
                 args=runtime_args,
-                shared_int8=shared_int8,
+                shared_candidate_inputs=shared_candidate_inputs,
                 save_pred_json=False,
             )
         finally:
             shared_inputs_obj.cleanup()
     finally:
         resolved_annotations.cleanup()
+        if onnx_candidate_artifact is not None:
+            onnx_candidate_artifact.cleanup()
         try:
             adb_shell(
                 adb_serial,
@@ -1605,20 +1814,24 @@ def run_fp_int_pair_map_eval(
         except subprocess.CalledProcessError as cleanup_exc:
             print(f"[warn] remote cleanup failed: {cleanup_exc}")
 
-    fp_map50 = float(fp_row["map50"])
-    int_map50 = float(int_row["map50"])
-    abs_delta, pct_delta, trend = _compute_delta_summary(fp_map50, int_map50)
+    reference_map50 = float(reference_row["map50"])
+    converted_map50 = float(converted_row["map50"])
+    abs_delta, pct_delta, trend = _compute_delta_summary(
+        reference_map50, converted_map50
+    )
 
     report_text = make_report_text(
         model_type=model_type,
+        runtime=runtime,
+        precision=precision,
         fp_head=fp_head,
         annotations=ann_path,
         images=img_dir,
         image_count=len(imgs),
-        fp_model=str(fp_model_path),
-        int_model=str(int_model_path),
-        fp_map50=fp_map50,
-        int_map50=int_map50,
+        reference_model=str(reference_model_path),
+        converted_model=str(converted_model_path),
+        reference_map50=reference_map50,
+        converted_map50=converted_map50,
         abs_delta=abs_delta,
         pct_delta=pct_delta,
         trend=trend,
@@ -1631,11 +1844,17 @@ def run_fp_int_pair_map_eval(
 
     return {
         "model_type": model_type,
+        "runtime": runtime,
+        "precision": precision,
         "fp_head": fp_head,
-        "fp_map50": fp_map50,
-        "int_map50": int_map50,
+        "reference_map50": reference_map50,
+        "converted_map50": converted_map50,
         "abs_delta": abs_delta,
         "pct_delta": pct_delta,
         "trend": trend,
         "output_text": str(output_path),
     }
+
+
+def run_fp_int_pair_map_eval(*args, **kwargs):
+    return run_pair_map_eval(*args, **kwargs)

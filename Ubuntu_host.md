@@ -90,52 +90,54 @@ If you want a simpler guided setup for configure flow, start with the
 [iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main) tutorial:
 [YOLO26 Configure Flow Tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).
 
-The examples below use `yolov26`. You can also use `--type yolov10` or `--type yolov11`.
+The examples below use `yolov26` with `--runtime litert --precision int8`. You can also use
+`--type yolov10` or `--type yolov11`, and swap in any supported runtime/precision pair:
+`litert/int8`, `litert/fp32`, `onnx/fp32`, or `onnx/w8a16`.
 
 ### QC
 
-Use `qc` to quantize and compile a supported FP `.pt` model into a deployment-ready `.tflite`
-model through QAI Hub.
+Use `qc` to convert a supported FP `.pt` model into a deployment-ready artifact through QAI Hub.
 
-Configure the required paths: FP model path and calibration image directory.
+For the LiteRT INT8 example below, configure the required paths: FP model path and calibration
+image directory.
 
 ```bash
-./docker/iqf configure qc --type yolov26
+./docker/iqf configure qc --type yolov26 --runtime litert --precision int8
 ```
 
 Run the mode:
 
 ```bash
-./docker/iqf run qc --type yolov26
+./docker/iqf run qc --type yolov26 --runtime litert --precision int8
 ```
 
-Output location: `out/model/yolov26/yolov26_<quant>_<timestamp>.tflite`
+Output location: `out/model/yolov26/yolov26_litert_int8_<timestamp>.tflite`
 
 ### mAP
 
 Use `mAP` to compare source versus converted model quality at `mAP@0.5`. The source model runs on
 the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through ADB.
 
-Configure the required paths: annotations path, image directory, FP model path, and converted
-model path.
+Configure the required paths: annotations path, image directory, reference model path, and
+converted model path.
 
 ```bash
-./docker/iqf configure mAP --type yolov26
+./docker/iqf configure mAP --type yolov26 --runtime litert --precision int8
 ```
 
 Run the mode:
 
 ```bash
-./docker/iqf run mAP --type yolov26
+./docker/iqf run mAP --type yolov26 --runtime litert --precision int8
 ```
 
 For a smaller validation run, you can limit the number of images:
 
 ```bash
-./docker/iqf run mAP --type yolov26 --max-images 5
+./docker/iqf run mAP --type yolov26 --runtime litert --precision int8 --max-images 5
 ```
 
-Output location: `out/mAP_results/yolov26/yolov26_mAP_result_<timestamp>.txt`
+Output location: `out/mAP_results/yolov26/yolov26_mAP_result_litert_int8_<timestamp>.txt`
 
 ### Test
 
@@ -145,16 +147,16 @@ Configure the required paths: prepared model path, YAML file path, and test imag
 directory path.
 
 ```bash
-./docker/iqf configure test --type yolov26
+./docker/iqf configure test --type yolov26 --runtime litert --precision int8
 ```
 
 Run the mode:
 
 ```bash
-./docker/iqf run test --type yolov26 --adb
+./docker/iqf run test --type yolov26 --runtime litert --precision int8 --adb
 ```
 
-Output location: `out/test/yolov26/yolov26_inference_<timestamp>/`
+Output location: `out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`
 
 > NOTE:
 > `test` in configure flow commands uses ADB-based host execution. Direct on-device inference is
@@ -165,23 +167,25 @@ Output location: `out/test/yolov26/yolov26_inference_<timestamp>/`
 
 ## One-Shot Commands
 
-The examples below use `yolov26`. The same workflow also supports `yolov10` and `yolov11` by
-changing `--type` and supplying the matching model files directly on the command line.
+The examples below use `yolov26` with `--runtime litert --precision int8`. The same workflow also
+supports `yolov10` and `yolov11` by changing `--type`, and supports `litert/fp32`, `onnx/fp32`,
+and `onnx/w8a16` by updating `--runtime`, `--precision`, and the converted model artifact path.
 
 ### QC Mode
 
-Use `qc` to quantize and compile a supported FP `.pt` model into a deployment-ready `.tflite`
-model through QAI Hub.
+Use `qc` to convert a supported FP `.pt` model into a deployment-ready artifact through QAI Hub.
 
 ```bash
 ./docker/iqf run qc \
   --type yolov26 \
+  --runtime litert \
+  --precision int8 \
   --model /path/to/yolov26n.pt \
   --calib_dir /path/to/calibration_images
 ```
 
 By default, this writes the compiled model to
-`out/model/yolov26/yolov26_<quant>_<timestamp>.tflite`.
+`out/model/yolov26/yolov26_litert_int8_<timestamp>.tflite`.
 
 For advanced `qc` options, see [docs/qc_mode.md](./docs/qc_mode.md).
 
@@ -193,17 +197,19 @@ the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through A
 ```bash
 ./docker/iqf run mAP \
   --type yolov26 \
+  --runtime litert \
+  --precision int8 \
   --annotations /path/to/instances_val2017.json \
   --images /path/to/val2017 \
-  --fp-model /path/to/yolov26n.pt \
-  --int-model /path/to/yolov26_int8.tflite
+  --reference-model /path/to/yolov26n.pt \
+  --converted-model /path/to/yolov26_litert_int8.tflite
 ```
 
 `--annotations` can be either a COCO `.json` file or a custom annotation directory containing
 separate YOLO `.txt` labels or VOC `.xml` labels for each image in the images directory.
 
 By default, this writes the report to
-`out/mAP_results/yolov26/yolov26_mAP_result_<timestamp>.txt`.
+`out/mAP_results/yolov26/yolov26_mAP_result_litert_int8_<timestamp>.txt`.
 
 For `yolov10` and `yolov26`, if the converted model was generated with `--qc-head one2one`, run
 `mAP` with `--fp-head one2one` so the FP branch matches the converted model.
@@ -218,14 +224,16 @@ runs from the host through ADB.
 ```bash
 ./docker/iqf run test \
   --type yolov26 \
-  --model /path/to/yolov26_int8.tflite \
+  --runtime litert \
+  --precision int8 \
+  --model /path/to/yolov26_litert_int8.tflite \
   --yaml /path/to/coco.yaml \
   --images /path/to/test_images \
   --adb
 ```
 
 By default, this writes annotated images, detection `.txt` files, and `classes.txt` to
-`out/test/yolov26/yolov26_inference_<timestamp>/`.
+`out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`.
 
 Use `--output` to override the default test output directory.
 
