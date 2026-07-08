@@ -36,13 +36,21 @@ Open Windows PowerShell with Administrator rights:
 3. Right-click `Windows PowerShell`.
 4. Select `Run as administrator`.
 
-### STEP 3: Clone the Repository
+### STEP 3: Download and Extract the Repository
 
 ```powershell
 cd "$env:USERPROFILE"
-git clone https://github.com/InnoIPA/iQ-Foundry.git
-cd iQ-Foundry
+Remove-Item -Recurse -Force iQ-Foundry,iQ-Foundry-main,iQ-Foundry.zip -ErrorAction SilentlyContinue
+Invoke-WebRequest https://github.com/InnoIPA/iQ-Foundry/archive/refs/heads/main.zip -OutFile iQ-Foundry.zip
+Expand-Archive .\iQ-Foundry.zip -DestinationPath . -Force
+Rename-Item .\iQ-Foundry-main iQ-Foundry
+cd .\iQ-Foundry
 ```
+
+> NOTE:
+> For the Windows host workflow, the PowerShell download-and-extract flow above is recommended.
+> Using `git clone` on Windows requires a separate Git installation and may introduce line-ending
+> issues.
 
 ### STEP 4: Run the Windows WSL Setup Helper
 
