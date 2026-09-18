@@ -676,11 +676,21 @@ def _class_dim_for_anchor_count(
     return None
 
 
+def _litert_interpreter_cls():
+    """Return the LiteRT Interpreter class.
+
+    Runtime change (TF -> LiteRT): this replaces the former
+    `tflite_runtime -> tensorflow.lite.python.interpreter` fallback chain that was
+    duplicated at three call sites. ai-edge-litert exposes the same Interpreter API.
+    Imported lazily so CLI help still works without the host inference deps installed.
+    """
+    from ai_edge_litert.interpreter import Interpreter
+
+    return Interpreter
+
+
 def _extract_tflite_class_count(model_path: Path) -> int:
-    try:
-        from tflite_runtime.interpreter import Interpreter
-    except Exception:
-        from tensorflow.lite.python.interpreter import Interpreter
+    Interpreter = _litert_interpreter_cls()
 
     interp = Interpreter(model_path=str(model_path))
     interp.allocate_tensors()
@@ -978,10 +988,7 @@ class PTRawModel:
 
 class TFLiteRawModel:
     def __init__(self, model_path: str):
-        try:
-            from tflite_runtime.interpreter import Interpreter
-        except Exception:
-            from tensorflow.lite.python.interpreter import Interpreter
+        Interpreter = _litert_interpreter_cls()
         self.interp = Interpreter(model_path=model_path)
         self.interp.allocate_tensors()
         self.input_detail = self.interp.get_input_details()[0]
@@ -1604,10 +1611,7 @@ def _build_model_cfgs(
 
 
 def _load_tflite_input_detail(int_model_path: Path) -> dict:
-    try:
-        from tflite_runtime.interpreter import Interpreter
-    except Exception:
-        from tensorflow.lite.python.interpreter import Interpreter
+    Interpreter = _litert_interpreter_cls()
 
     interp = Interpreter(model_path=str(int_model_path))
     interp.allocate_tensors()

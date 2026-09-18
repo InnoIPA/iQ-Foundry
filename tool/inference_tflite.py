@@ -30,8 +30,12 @@ from pathlib import Path
 
 cv2 = None
 np = None
-tf = None
 yaml = None
+# Runtime change (TF -> LiteRT): these two replace the former lazy `tf` global.
+# ai-edge-litert exposes Interpreter/load_delegate with the same signatures as
+# tf.lite.Interpreter / tf.lite.experimental.load_delegate.
+litert_interpreter = None
+litert_load_delegate = None
 
 IMG_W = 640
 IMG_H = 640
@@ -155,7 +159,7 @@ def _normalize_output_layout(
 
 
 def _ensure_runtime_deps() -> None:
-    global cv2, np, tf, yaml
+    global cv2, litert_interpreter, litert_load_delegate, np, yaml
     if cv2 is None:
         import cv2 as _cv2
 
@@ -164,10 +168,13 @@ def _ensure_runtime_deps() -> None:
         import numpy as _np
 
         np = _np
-    if tf is None:
-        import tensorflow as _tf
+    if litert_interpreter is None:
+        # Runtime change (TF -> LiteRT): was `import tensorflow as _tf`. Kept lazy so
+        # CLI help still works on hosts without the inference deps installed.
+        from ai_edge_litert.interpreter import Interpreter, load_delegate
 
-        tf = _tf
+        litert_interpreter = Interpreter
+        litert_load_delegate = load_delegate
     if yaml is None:
         import yaml as _yaml
 
@@ -483,7 +490,8 @@ class EndToEndInference:
 
         delegates = []
         if not args.no_qnn:
-            delegate = tf.lite.experimental.load_delegate(
+            # Runtime change (TF -> LiteRT): was tf.lite.experimental.load_delegate.
+            delegate = litert_load_delegate(
                 args.qnn_lib, options={"backend_type": args.backend}
             )
             delegates = [delegate]
@@ -491,7 +499,8 @@ class EndToEndInference:
         else:
             print("CPU only.")
 
-        self.interpreter = tf.lite.Interpreter(
+        # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+        self.interpreter = litert_interpreter(
             model_content=model_content, experimental_delegates=delegates
         )
         self.interpreter.allocate_tensors()
@@ -880,14 +889,16 @@ def _validate_inference_inputs(model_path: str, yaml_path: str, img_dir: str) ->
 
 
 def _extract_box_channel_count(model_path: str) -> int:
-    interp = tf.lite.Interpreter(model_path=model_path)
+    # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+    interp = litert_interpreter(model_path=model_path)
     interp.allocate_tensors()
     box_od, _ = _resolve_raw_output_details(interp.get_output_details())
     return _extract_box_layout(box_od["shape"])[0]
 
 
 def _extract_class_count(model_path: str) -> int:
-    interp = tf.lite.Interpreter(model_path=model_path)
+    # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+    interp = litert_interpreter(model_path=model_path)
     interp.allocate_tensors()
     return _extract_class_count_from_output_details(interp.get_output_details())
 

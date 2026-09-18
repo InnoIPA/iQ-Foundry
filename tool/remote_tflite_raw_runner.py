@@ -18,7 +18,11 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
+
+# Runtime change (TF -> LiteRT): ai-edge-litert replaces tensorflow as the LiteRT
+# interpreter. It exposes Interpreter/load_delegate with the same signatures as
+# tf.lite.Interpreter / tf.lite.experimental.load_delegate.
+from ai_edge_litert.interpreter import Interpreter, load_delegate
 
 
 def dequant(arr: np.ndarray, scale: float, zp: int) -> np.ndarray:
@@ -92,13 +96,15 @@ def main():
 
     delegates = []
     if not args.no_qnn:
-        delegate = tf.lite.experimental.load_delegate(
+        # Runtime change (TF -> LiteRT): was tf.lite.experimental.load_delegate.
+        delegate = load_delegate(
             args.qnn_lib,
             options={"backend_type": args.backend},
         )
         delegates = [delegate]
 
-    interpreter = tf.lite.Interpreter(
+    # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+    interpreter = Interpreter(
         model_content=model_content,
         experimental_delegates=delegates,
     )
