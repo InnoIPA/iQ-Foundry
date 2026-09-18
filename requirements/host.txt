@@ -3,10 +3,19 @@
 #
 # Mode-to-package mapping:
 # - qc (host): numpy, Pillow, torch, ultralytics, qai-hub
-# - mAP (host): qc packages + pycocotools + tensorflow + onnx + onnxruntime; also requires system adb
-# - mAP (device part): numpy, tensorflow on IQ9 target (see requirements/target.txt)
-# - test --adb (host): numpy, tensorflow, opencv-python, PyYAML, onnx, onnxruntime; also requires system adb
-# - test (IQ9 local): numpy, tensorflow, PyYAML, Pillow, system cv2 (see requirements/target.txt)
+# - mAP (host): qc packages + pycocotools + ai-edge-litert + onnx + onnxruntime; also requires system adb
+# - mAP (device part): numpy, ai-edge-litert on IQ9 target (see requirements/target.txt)
+# - test --adb (host): numpy, ai-edge-litert, opencv-python, PyYAML, onnx, onnxruntime; also requires system adb
+# - test (IQ9 local): numpy, ai-edge-litert, PyYAML, Pillow, system cv2 (see requirements/target.txt)
+#
+# RUNTIME CHANGE (TF -> LiteRT): ai-edge-litert replaces tensorflow==2.19.0 here.
+# The repo only ever used tf.lite.Interpreter and tf.lite.experimental.load_delegate,
+# both of which ai-edge-litert exposes with identical signatures. Dropping tensorflow
+# removes the single largest dependency from the host image.
+#
+# numpy stays on 1.26.4 here (unlike requirements/target.txt): torch==2.4.1 requires
+# numpy<2. Only the target moved to numpy 2.x, because QLI2.0's Python 3.14 has no
+# cp314 wheel for numpy 1.26.4.
 
 numpy==1.26.4
 Pillow==11.3.0
@@ -14,7 +23,7 @@ torch==2.4.1
 ultralytics==8.4.16
 qai-hub==0.46.0
 pycocotools==2.0.10
-tensorflow==2.19.0
+ai-edge-litert==2.2.0
 opencv-python==4.11.0.86
 PyYAML==6.0.3
 onnx==1.19.0
