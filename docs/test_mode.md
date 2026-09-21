@@ -144,7 +144,7 @@ uv pip install -r requirements/target.txt
 For direct ONNX Runtime execution on the device, install the wheel from `wheels/`:
 
 ```bash
-uv pip install wheels/onnxruntime_qnn-1.23.0-cp312-cp312-linux_aarch64.whl
+uv pip install wheels/onnxruntime_qnn-1.25.1-cp314-cp314-linux_aarch64.whl
 ```
 
 Sample direct command:
