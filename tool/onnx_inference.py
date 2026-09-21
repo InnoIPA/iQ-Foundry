@@ -41,10 +41,13 @@ IMG_H = 640
 REG_MAX = 16
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 IQ9_ARCH_ALIASES = {"aarch64", "arm64"}
+# Runtime change (ORT cp312 -> cp314): QLI2.0 ships Python 3.14, so the previous
+# cp312 wheel could not be installed on target at all. This is the only place the
+# bundled wheel filename appears; both ADB call sites read this constant.
 DEFAULT_ORT_QNN_WHEEL = str(
     Path(__file__).resolve().parent.parent
     / "wheels"
-    / "onnxruntime_qnn-1.23.0-cp312-cp312-linux_aarch64.whl"
+    / "onnxruntime_qnn-1.25.1-cp314-cp314-linux_aarch64.whl"
 )
 EXPECTED_BOX_MODES = {
     "yolov10": "dfl64",
