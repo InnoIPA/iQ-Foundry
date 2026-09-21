@@ -27,4 +27,9 @@ ai-edge-litert==2.2.0
 opencv-python==4.11.0.86
 PyYAML==6.0.3
 onnx==1.19.0
-onnxruntime==1.22.0
+# Runtime change (ORT cp312 -> cp314): 1.23.2 is required, not cosmetic. The host opens
+# its own CPU session in load_onnx_model_metadata() and reads the graph in
+# _load_w8a16_output_quant_params(), and the w8a16 models are ONNX IR v11. ORT 1.22
+# vendors onnx 1.17 (max IR 10) and rejects them; 1.23.2 vendors onnx 1.18 (IR 11).
+# 1.23.2 is also the last release with cp310 wheels, which the py3.10 container needs.
+onnxruntime==1.23.2
