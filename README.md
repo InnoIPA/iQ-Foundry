@@ -15,10 +15,10 @@
 <p align="center">
   <img src="./docs/Images/support-runtime-precision.png" alt="Supported runtime and precision combinations" width="420">
   <br>
-  <strong>New in v0.0.3:</strong> FP32 and mixed-precision deployment support!!
+  <strong>New in v1.0.0:</strong> QAIRT offline conversion with INT8, W8A16 and FP16 support!!
 </p>
 
-`iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible computer vision `.pt` models into `.tflite` and `.onnx` artifacts, validating reference-versus-converted quality with mAP@0.5, and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
+`iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible computer vision `.pt` models into `.tflite`, `.onnx`, and QAIRT `.bin` HTP context binary artifacts, validating reference-versus-converted quality with mAP@0.5, and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
 
 `iQ-Foundry` supports a Bring Your Own Model workflow. You can use your own compatible `yolov10`, `yolov11`, or `yolov26`  models with the pipeline. If you need pretrained YOLO weights, you can download official pretrained models from [Ultralytics](https://docs.ultralytics.com/).
 
@@ -114,7 +114,7 @@
       </tr>
       <tr>
         <td>Quantization</td>
-        <td><code>FP32 (float)</code>, <code>INT8 (W8A8)</code>, <code>W8A16 (INT mixed precision)</code></td>
+        <td><code>FP32 (float)</code>, <code>FP16 (half precision, QAIRT only)</code>, <code>INT8 (W8A8)</code>, <code>W8A16 (INT mixed precision)</code></td>
       </tr>
       <tr>
         <td>Target Device</td>
@@ -132,6 +132,10 @@
               <td align="center">
                 <img src="docs/Images/ort-logo.png" alt="ONNX Runtime" height="24"><br>
                 <code>ONNX Runtime</code>
+              </td>
+              <td align="center">
+                <img src="docs/Images/qairt-logo.png" alt="QAIRT" height="24"><br>
+                <code>QAIRT (Qualcomm AI Runtime)</code>
               </td>
             </tr>
           </table>
@@ -155,6 +159,7 @@
         <th><code>FP32</code></th>
         <th><code>INT8</code></th>
         <th><code>W8A16</code></th>
+        <th><code>FP16</code></th>
       </tr>
     </thead>
     <tbody>
@@ -163,11 +168,20 @@
         <td align="center">✓</td>
         <td align="center">✓</td>
         <td align="center">✗</td>
+        <td align="center">✗</td>
       </tr>
       <tr>
         <td><code>ONNX Runtime</code></td>
         <td align="center">✓</td>
         <td align="center">✗</td>
+        <td align="center">✓</td>
+        <td align="center">✗</td>
+      </tr>
+      <tr>
+        <td><code>QAIRT</code></td>
+        <td align="center">✗</td>
+        <td align="center">✓</td>
+        <td align="center">✓</td>
         <td align="center">✓</td>
       </tr>
     </tbody>
