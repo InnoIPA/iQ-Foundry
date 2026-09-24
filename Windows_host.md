@@ -15,7 +15,7 @@
 | Memory | Recommended minimum 16 GB RAM |
 | Target for `mAP` and host-side `test` | EXMP-Q911 (Qualcomm QCS9075) |
 | ADB connection | USB-C cable between the host and EXMP-Q911 |
-| QAI Hub access | [Qualcomm AI Hub](https://aihub.qualcomm.com/) API token |
+| QAI Hub access | [Qualcomm AI Hub](https://aihub.qualcomm.com/) API token (required for `litert` and `onnx` only; `qairt` converts offline) |
 
 ## Getting Started
 
@@ -131,7 +131,8 @@ If you want a simpler guided setup for configure flow, start with the
 
 The examples below use `yolov26` with `--runtime litert --precision int8`. You can also use
 `--type yolov10` or `--type yolov11`, and swap in any supported runtime/precision pair:
-`litert/int8`, `litert/fp32`, `onnx/fp32`, or `onnx/w8a16`.
+`litert/int8`, `litert/fp32`, `onnx/fp32`, `onnx/w8a16`, `qairt/int8`, `qairt/w8a16`, or
+`qairt/fp16`.
 
 ### QC
 
@@ -208,7 +209,8 @@ Output location: `out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`
 
 The examples below use `yolov26` with `--runtime litert --precision int8`. The same workflow also
 supports `yolov10` and `yolov11` by changing `--type`, and supports `litert/fp32`, `onnx/fp32`,
-and `onnx/w8a16` by updating `--runtime`, `--precision`, and the converted model artifact path.
+`onnx/w8a16`, `qairt/int8`, `qairt/w8a16`, and `qairt/fp16` by updating `--runtime`,
+`--precision`, and the converted model artifact path.
 
 ### QC Mode
 
