@@ -13,9 +13,12 @@
 # limitations under the License.
 from __future__ import annotations
 
+import inspect
+import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tempfile
 import zipfile
 
@@ -228,6 +231,157 @@ def _finalize_downloaded_onnx_artifact(
 # ----------------------------
 # Pipeline
 # ----------------------------
+# --- QAIRT offline conversion -------------------------------------------------
+# Builds a pre-compiled HTP context binary locally: ONNX -> DLC -> (quantize) ->
+# context binary. No Qualcomm AI Hub and no device-side compilation.
+
+QAIRT_SDK_RELATIVE_PATH = "vendor/qairt/2.47.0.260601"
+QAIRT_DSP_ARCH = "v73"  # QCS9075 / SA8775P-class HTP
+QAIRT_ONNX_OPSET = 17
+# Repo scheme names map onto qairt-quantizer's spelling; "minmax" is rejected.
+QAIRT_CALIBRATION_METHODS = {"mse": "mse", "minmax": "min-max"}
+
+
+def qairt_sdk_root() -> str:
+    root = Path(__file__).resolve().parent.parent / QAIRT_SDK_RELATIVE_PATH
+    if not (root / "bin").is_dir():
+        raise RuntimeError(
+            f"QAIRT SDK not found at {root}. "
+            "The vendored SDK ships with the repository; re-clone or restore it."
+        )
+    return str(root)
+
+
+def qairt_env() -> dict:
+    """Environment for the vendored SDK tools."""
+    sdk = qairt_sdk_root()
+    env = dict(os.environ)
+    env["QNN_SDK_ROOT"] = sdk
+    env["PATH"] = f"{sdk}/bin:" + env.get("PATH", "")
+    env["LD_LIBRARY_PATH"] = f"{sdk}/lib:" + env.get("LD_LIBRARY_PATH", "")
+    env["PYTHONPATH"] = f"{sdk}/lib/python:" + env.get("PYTHONPATH", "")
+    return env
+
+
+def run_qairt_tool(args: list[str], step: str) -> str:
+    """Run one vendored SDK tool, surfacing its tail on failure."""
+    sdk = qairt_sdk_root()
+    proc = subprocess.run(
+        [f"{sdk}/bin/{args[0]}", *args[1:]],
+        env=qairt_env(),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
+        raise RuntimeError(f"QAIRT {step} failed:\n{tail}")
+    return proc.stdout
+
+
+def qairt_graph_name(dlc_path: str) -> str:
+    """Graph name recorded in the DLC; the HTP config must reference it exactly."""
+    out = run_qairt_tool(["qairt-dlc-info", "-i", dlc_path], "dlc-info")
+    for line in out.splitlines():
+        if line.startswith("Info of graph: "):
+            return line.split("Info of graph: ", 1)[1].strip()
+    raise RuntimeError(f"Could not read graph name from {dlc_path}")
+
+
+def write_qairt_calibration_inputs(
+    calib_dir: str, input_hw: int, max_calib: int, work_dir: str
+) -> str:
+    """Dump calibration images as float32 NHWC .raw files and list them."""
+    samples = load_calibration_images(calib_dir, input_hw, max_images=max_calib)
+    if not samples:
+        raise RuntimeError(f"No calibration images found in {calib_dir}")
+    raw_dir = os.path.join(work_dir, "calib")
+    os.makedirs(raw_dir, exist_ok=True)
+    listed = []
+    for index, sample in enumerate(samples):
+        raw_path = os.path.join(raw_dir, f"calib_{index:04d}.raw")
+        np.ascontiguousarray(sample, dtype=np.float32).tofile(raw_path)
+        listed.append(raw_path)
+    list_path = os.path.join(work_dir, "input_list.txt")
+    with open(list_path, "w") as handle:
+        handle.write("\n".join(listed) + "\n")
+    return list_path
+
+
+def export_traced_model_to_onnx(pt_model, input_shape, onnx_path: str) -> None:
+    """Export the traced wrapper to ONNX with fixed shapes and named outputs."""
+    assert torch is not None
+    dummy = torch.zeros(input_shape, dtype=torch.float32)
+    kwargs = {
+        "opset_version": QAIRT_ONNX_OPSET,
+        "input_names": ["image"],
+        "output_names": ["boxes", "scores"],
+        "dynamic_axes": None,
+        "do_constant_folding": True,
+    }
+    # torch >= 2.6 defaults to the dynamo exporter, which cannot export these heads.
+    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
+        kwargs["dynamo"] = False
+    torch.onnx.export(pt_model, dummy, onnx_path, **kwargs)
+
+
+def build_qairt_context_binary(
+    dlc_path: str, output_path: str, work_dir: str, vtcm_mb: int = 8
+) -> None:
+    """Offline-prepare the DLC into an HTP context binary."""
+    sdk = qairt_sdk_root()
+    graph_name = qairt_graph_name(dlc_path)
+    graph_cfg = os.path.join(work_dir, "htp_graph.json")
+    ext_cfg = os.path.join(work_dir, "htp_ext.json")
+    with open(graph_cfg, "w") as handle:
+        json.dump(
+            {
+                "graphs": [
+                    {
+                        "graph_names": [graph_name],
+                        "vtcm_mb": vtcm_mb,
+                        "O": 3,
+                        "dlbc": 1,
+                    }
+                ],
+                "devices": [
+                    {"dsp_arch": QAIRT_DSP_ARCH, "pd_session": "unsigned"}
+                ],
+            },
+            handle,
+        )
+    with open(ext_cfg, "w") as handle:
+        json.dump(
+            {
+                "backend_extensions": {
+                    "shared_library_path": "libQnnHtpNetRunExtensions.so",
+                    "config_file_path": graph_cfg,
+                }
+            },
+            handle,
+        )
+
+    out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    stem = Path(output_path).stem
+    run_qairt_tool(
+        [
+            "qnn-context-binary-generator",
+            "--backend", f"{sdk}/lib/libQnnHtp.so",
+            "--dlc_path", dlc_path,
+            "--binary_file", stem,
+            "--config_file", ext_cfg,
+            "--output_dir", out_dir,
+            "--log_level", "error",
+        ],
+        "context-binary-generator",
+    )
+    produced = os.path.join(out_dir, f"{stem}.bin")
+    if produced != os.path.abspath(output_path):
+        shutil.move(produced, output_path)
+    if not os.path.exists(output_path):
+        raise RuntimeError(f"QAIRT context binary was not produced at {output_path}")
+
+
 class YoloV10Pipeline:
     def convert(
         self,
@@ -274,6 +428,17 @@ class YoloV10Pipeline:
                 qc_quant_scheme=qc_quant_scheme,
             )
             return
+        if runtime == "qairt":
+            self.export_qairt(
+                model_path=model_path,
+                output_path=output_path,
+                precision=precision,
+                calib_dir=calib_dir,
+                max_calib=max_calib,
+                qc_head=qc_head,
+                qc_quant_scheme=qc_quant_scheme,
+            )
+            return
         raise ValueError(f"Unsupported runtime/precision: {runtime}/{precision}")
 
     def _build_traced_model(self, model_path: str, qc_head: str):
@@ -290,6 +455,80 @@ class YoloV10Pipeline:
             torch_model, example, strict=False, check_trace=False
         )
         return pt_model, input_hw, input_shape
+
+    def export_qairt(
+        self,
+        model_path: str,
+        output_path: str,
+        precision: str,
+        calib_dir: str | None = None,
+        max_calib: int = 200,
+        qc_head: str = "one2many",
+        qc_quant_scheme: str = "mse",
+    ) -> None:
+        """Build an HTP context binary: ONNX -> DLC -> (quantize) -> .bin."""
+        _require_qc_deps()
+        if precision not in ("int8", "w8a16", "fp16"):
+            raise ValueError(f"Unsupported QAIRT precision: {precision}")
+
+        pt_model, input_hw, input_shape = self._build_traced_model(model_path, qc_head)
+
+        with tempfile.TemporaryDirectory(prefix="qairt_yolov10_") as work_dir:
+            onnx_path = os.path.join(work_dir, "model.onnx")
+            export_traced_model_to_onnx(pt_model, input_shape, onnx_path)
+
+            dlc_path = os.path.join(work_dir, "model.dlc")
+            convert_args = [
+                "qairt-converter",
+                "--input_network", onnx_path,
+                "--source_model_input_shape", "image", f"1,{input_hw},{input_hw},3",
+                "--source_model_input_layout", "image", "NHWC",
+                "--out_tensor_name", "boxes",
+                "--out_tensor_name", "scores",
+                "--target_backend", "HTP",
+                "--output_path", dlc_path,
+            ]
+            if precision == "fp16":
+                # HTP has no FP32 math; a float graph is built directly at FP16.
+                convert_args += ["--float_bitwidth", "16"]
+            run_qairt_tool(convert_args, "converter")
+
+            graph_dlc = dlc_path
+            if precision != "fp16":
+                if not calib_dir:
+                    raise ValueError(
+                        f"--calib_dir is required for qairt/{precision}"
+                    )
+                list_path = write_qairt_calibration_inputs(
+                    calib_dir, input_hw, max_calib, work_dir
+                )
+                graph_dlc = os.path.join(work_dir, "model_quantized.dlc")
+                method = QAIRT_CALIBRATION_METHODS.get(
+                    qc_quant_scheme, qc_quant_scheme
+                )
+                quant_args = [
+                    "qairt-quantizer",
+                    "--input_dlc", dlc_path,
+                    "--input_list", list_path,
+                    "--output_dlc", graph_dlc,
+                    "--act_bitwidth", "16" if precision == "w8a16" else "8",
+                    "--weights_bitwidth", "8",
+                    "--bias_bitwidth", "32",
+                    "--use_per_channel_quantization",
+                    "--act_quantizer_calibration", method,
+                    "--act_quantizer_schema", "asymmetric",
+                    "--param_quantizer_calibration", "min-max",
+                    "--param_quantizer_schema", "symmetric",
+                    "--target_backend", "HTP",
+                ]
+                if precision == "w8a16":
+                    # The attention MatMuls take two dynamic activations, so at
+                    # 16-bit they land on HTP's A16W16 path, which requires a
+                    # symmetric B input and otherwise fails to finalize.
+                    quant_args.append("--disable_dynamic_16_bit_weights")
+                run_qairt_tool(quant_args, "quantizer")
+
+            build_qairt_context_binary(graph_dlc, output_path, work_dir)
 
     def export_onnx_fp32(
         self,
