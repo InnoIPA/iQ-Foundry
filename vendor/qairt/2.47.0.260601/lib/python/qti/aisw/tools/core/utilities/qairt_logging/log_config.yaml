@@ -1,0 +1,59 @@
+# This file cannot be edited by a user.
+
+# Please reach out to Akin Solomon, Surbhit Sinha for any questions or suggestions.
+# For suggestion to update/add to the log_config.yaml
+  # State the use case which requires this file to be updated, along with the
+  # requested update/addition.
+  # Once approved, the logging utility team will make the changes and push them in.
+
+---
+version: 1
+disable_existing_loggers: false
+formatters:
+  simple:
+    format: "%(name)s: %(asctime)s | %(levelname)s | %(message)s"
+  extended:
+    format: "%(name)s: %(asctime)s | %(levelname)s | %(funcName)s | %(filename)s:%(lineno)s - %(message)s"
+    datefmt: "%Y-%m-%dT%H:%M:%SZ"
+  debug:
+    format: "%(name)s: %(asctime)s | %(levelname)s | %(filename)s:%(lineno)s - %(message)s | %(threadName)s | %(process)d"
+    datefmt: "%Y-%m-%dT%H:%M:%SZ"
+handlers:
+  dev_console:
+    class: "logging.StreamHandler"
+    level: "TRACE"
+    formatter: "debug"
+    stream: "ext://sys.stdout"
+  user_console:
+    class: "logging.StreamHandler"
+    level: "TRACE"
+    formatter: "simple"
+    stream: "ext://sys.stdout"
+  user_file_handler:
+    class: "logging.handlers.RotatingFileHandler"
+    level: "TRACE"
+    formatter: "simple"
+    filename: "user_info.log"
+    maxBytes: 10485760
+    backupCount: 40
+    encoding: "utf8"
+  dev_file_handler:
+    class: "logging.handlers.RotatingFileHandler"
+    level: "TRACE"
+    formatter: "debug"
+    filename: "dev_info.log"
+    maxBytes: 10485760
+    backupCount: 40
+    encoding: "utf8"
+  error_file_handler:
+    class: "logging.handlers.RotatingFileHandler"
+    level: "ERROR"
+    formatter: "simple"
+    filename: "errors.log"
+    maxBytes: 10485760
+    backupCount: 40
+    encoding: "utf8"
+loggers:
+root:
+  level: "INFO"
+  handlers: "dev_console"

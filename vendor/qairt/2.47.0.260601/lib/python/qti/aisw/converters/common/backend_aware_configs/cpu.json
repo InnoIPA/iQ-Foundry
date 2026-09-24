@@ -1,0 +1,4571 @@
+{
+    "defaults": {
+        "ops": {
+            "is_output_quantized": "True"
+        },
+        "params": {
+            "is_quantized": "True",
+            "is_symmetric": "True"
+        },
+        "strict_symmetric": "False",
+        "per_channel_quantization": "True"
+    },
+    "params": {
+        "bias": {
+            "is_quantized": "False"
+        }
+    },
+    "op_type": {
+        "defaults": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int"
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int"
+                    }
+                }
+            ]
+        },
+        "Cast": {
+            "is_output_quantized": "False",
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Dropout": {
+            "is_output_quantized": "False"
+        },
+        "Expand": {
+            "is_output_quantized": "False"
+        },
+        "Squeeze": {
+            "is_output_quantized": "False",
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Pad": {
+            "is_output_quantized": "False",
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Mean": {
+            "is_output_quantized": "False"
+        },
+        "Gemm": {
+            "per_channel_quantization": "False"
+        },
+        "LayerNorm": {
+            "per_channel_quantization": "False",
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "Gather": {
+            "is_output_quantized": "False",
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ArgbToRgb": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Argmax": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Argmin": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Batchnorm": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "BatchToSpace": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ChannelShuffle": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Concat": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Conv2d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "Conv3d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "Convert": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "CumulativeSum": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "DepthToSpace": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "DepthWiseConv2d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "Dequantize": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "DetectionOutput": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    },
+                    "activation_3": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 3
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    },
+                    "activation_3": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 3
+                    }
+                }
+            ]
+        },
+        "ElementWiseAbs": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseAdd": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseAnd": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseAtan": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseCeil": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseDivide": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseExp": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseMaximum": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseMinimum": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseMultiply": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseSquaredDifference": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseSquareRoot": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseRsqrt": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseSin": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseSubtract": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseFloor": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseGreater": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseLog": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseNeg": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseNeuron": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseNot": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWisePower": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseRound": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseSelect": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseUnary": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ExpandDims": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ExtractGlimpse": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "FullyConnected": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "GatherNd": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Gelu": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "HardSwish": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "HeatMapMaxKeyPoint": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "ImageProjectionTransform": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "InstanceNorm": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "L2Norm": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Lrn": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Lstm": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 2
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    },
+                    "activation_3": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 3
+                    },
+                    "activation_4": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 4
+                    },
+                    "activation_5": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 5
+                    },
+                    "activation_6": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 6
+                    },
+                    "activation_7": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 7
+                    }
+                }
+            ]
+        },
+        "MatMul": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "MultiClassNms": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    },
+                    "activation_3": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 3
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    },
+                    "activation_3": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 3
+                    }
+                }
+            ]
+        },
+        "Nv12ToRgb": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Nv21ToRgb": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Pack": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "PoolAvg2d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "PoolAvg3d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "PoolMax2d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "PoolMax3d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Prelu": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Quantize": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ReduceMax": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ReduceMean": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ReduceMin": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ReduceSum": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Relu": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Relu1": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Relu6": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ReluMinMax": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Reshape": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Resize": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ResizeBilinear": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ResizeNearestNeighbor": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "RoiAlign": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ScatterNd": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Sigmoid": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Softmax": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "SpaceToBatch": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "SpaceToDepth": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Split": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "StridedSlice": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Tanh": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Tile": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "TopK": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "Transpose": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "TransposeConv2d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "TransposeConv3d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    },
+                    "bias": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True"
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "UnPack": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "AxisAlignedBboxTransform": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "BatchPermutation": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "BboxTransform": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "BoxWithNmsLimit": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    },
+                    "activation_3": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 3
+                    },
+                    "activation_4": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 4
+                    },
+                    "activation_5": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 5
+                    },
+                    "activation_6": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 6
+                    }
+                }
+            ]
+        },
+        "Buffer": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "CollectRpnProposals": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "CombinedNms": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    },
+                    "activation_3": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 3
+                    }
+                }
+            ]
+        },
+        "ConstantOfShape": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Correlation1D": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "CreateSparse": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "CropAndResize": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "DistributeFpnProposals": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "ElementWiseAsin": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseCos": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseFloorDiv": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "True",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseFmod": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseMod": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseOr": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseSign": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 16,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseSoftplus": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ElementWiseXor": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 8,
+                        "dtype": "bool",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Elu": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ExtractPatches": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "GatherElements": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 64,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "GroupNorm": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "param": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    },
+                    "bias": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False"
+                    }
+                }
+            ]
+        },
+        "Gru": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "GenerateProposals": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    },
+                    "activation_2": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 2
+                    }
+                }
+            ]
+        },
+        "GetSparseValues": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "GetSparseIndices": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "GridSample": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "L2Pool2d": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "LogSoftmax": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "MaskedSoftmax": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Moments": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "NonMaxSuppression": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    },
+                    "activation_1": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 1
+                    }
+                }
+            ]
+        },
+        "NonZero": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "OneHot": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ReduceProd": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ReduceSumSquare": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                },
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "True",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "RoiPooling": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "ScatterElements": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "Shape": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "int",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "SparseToDense": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        },
+        "RmsNorm": {
+            "supported_kernels": [
+                {
+                    "activation": {
+                        "bitwidth": 32,
+                        "dtype": "float",
+                        "is_signed": "False",
+                        "is_fixed_point": "False",
+                        "output_id": 0
+                    }
+                }
+            ]
+        }
+    },
+    "supergroups": [
+        {
+            "op_list": [
+                "Conv",
+                "Relu"
+            ]
+        },
+        {
+            "op_list": [
+                "Conv",
+                "Clip"
+            ]
+        },
+        {
+            "op_list": [
+                "ConvTranspose",
+                "Relu"
+            ]
+        },
+        {
+            "op_list": [
+                "Add",
+                "Relu"
+            ]
+        },
+        {
+            "op_list": [
+                "Gemm",
+                "Relu"
+            ]
+        }
+    ],
+    "model_input": {
+        "is_input_quantized": "True"
+    },
+    "model_output": {}
+}
