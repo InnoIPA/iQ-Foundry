@@ -25,11 +25,11 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
+from pathlib import Path
 
 from tool.onnx_inference import (
     DEFAULT_TFLITE_QNN_LIB,
@@ -39,8 +39,6 @@ from tool.onnx_inference import (
     _adb_pull,
     _adb_push,
     _adb_shell,
-    _commit_output_dir,
-    _has_meaningful_outputs,
     _is_iq9_native_runtime,
     _prepare_image_input,
     _run_test_directory,
@@ -251,7 +249,9 @@ def _read_result_pair(result_dir: str, meta: QAIRTModelMeta):
     for path in (box_path, cls_path):
         if not os.path.exists(path):
             raise RuntimeError(f"qnn-net-run produced no output at {path}")
-    boxes = np.fromfile(box_path, dtype=np.float32).reshape(1, box_channels, ANCHOR_COUNT)
+    boxes = np.fromfile(box_path, dtype=np.float32).reshape(
+        1, box_channels, ANCHOR_COUNT
+    )
     scores = np.fromfile(cls_path, dtype=np.float32).reshape(
         1, meta.class_count, ANCHOR_COUNT
     )
@@ -437,7 +437,9 @@ class ADBQAIRTRawModel:
         )
         self._pulled = tempfile.TemporaryDirectory(prefix="qairt_adb_out_")
         self._results: dict[int, str] = {}
-        _adb_shell(self.adb_serial, f"rm -rf {self.remote_dir}; mkdir -p {self.remote_dir}")
+        _adb_shell(
+            self.adb_serial, f"rm -rf {self.remote_dir}; mkdir -p {self.remote_dir}"
+        )
         self.remote_model = f"{self.remote_dir}/{Path(self.meta.model_path).name}"
         _adb_push(self.adb_serial, self.meta.model_path, self.remote_model)
 

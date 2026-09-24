@@ -1064,6 +1064,26 @@ def _prepare_image_input(
     return tmp_obj.name, tmp_obj
 
 
+def _accumulate_timing(runner, span_s, total_time_s, invoke_time_s):
+    """Fold one image's timing in.
+
+    Batched runners fetch results before the loop, so their device time is not
+    inside the measured span and is added back here.
+    """
+    invoke_s = runner.last_invoke_time_s
+    if not getattr(runner, "device_time_included", True):
+        span_s += invoke_s or 0.0
+    if invoke_s is None or invoke_time_s is None:
+        return total_time_s + span_s, None
+    return total_time_s + span_s, invoke_time_s + invoke_s
+
+
+def _format_invoke_ms(invoke_time_s, processed: int) -> str:
+    if invoke_time_s is None:
+        return "n/a"
+    return f"{(invoke_time_s / processed) * 1000.0:.3f}"
+
+
 def _run_test_directory(
     *,
     runner: "ORTRawModel",
@@ -1136,29 +1156,16 @@ def _run_test_directory(
             )
             t1 = time.perf_counter()
             processed += 1
-            elapsed = t1 - t0
-            invoke_s = runner.last_invoke_time_s
-            # Batched runners fetch results before the loop, so their device time
-            # is not inside the measured span and must be added back in.
-            if not getattr(runner, "device_time_included", True):
-                elapsed += invoke_s or 0.0
-            total_time_s += elapsed
-            if invoke_s is None:
-                invoke_time_s = None
-            elif invoke_time_s is not None:
-                invoke_time_s += invoke_s
+            total_time_s, invoke_time_s = _accumulate_timing(
+                runner, t1 - t0, total_time_s, invoke_time_s
+            )
             print(f"{image_file.name}: flow={flow} preNMS={pre_nms} kept={written}")
 
         if processed > 0:
             print("=== Inference Timing Summary ===")
             print(f"processed={processed}")
             print(f"avg_total_inference_ms={(total_time_s / processed) * 1000.0:.3f}")
-            if invoke_time_s is None:
-                print("avg_model_invoke_ms=n/a")
-            else:
-                print(
-                    f"avg_model_invoke_ms={(invoke_time_s / processed) * 1000.0:.3f}"
-                )
+            print(f"avg_model_invoke_ms={_format_invoke_ms(invoke_time_s, processed)}")
 
         if not _has_meaningful_outputs(staging_output_dir):
             raise RuntimeError(

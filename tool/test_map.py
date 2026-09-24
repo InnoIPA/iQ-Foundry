@@ -1287,6 +1287,36 @@ def validate_eval_class_count_compatibility(
         )
 
 
+def _build_qairt_runner(cfg: dict, args, shared_candidate_inputs=None):
+    """QAIRT runner: batched over adb, or local when already on the target."""
+    if not args.candidate_on_device:
+        return QAIRTRawModel(
+            model_path=cfg["path"],
+            model_type=cfg["model_type"],
+            precision=cfg["quant"],
+            qnn_lib=args.qnn_lib,
+            backend=args.backend,
+            no_qnn=args.no_qnn,
+        )
+    if shared_candidate_inputs is None:
+        raise RuntimeError(
+            "shared candidate inputs are required for on-device QAIRT mode"
+        )
+    print(f"{cfg['quant']} QAIRT inference mode: IQ9 via adb")
+    return ADBQAIRTRawModel(
+        model_path=cfg["path"],
+        model_type=cfg["model_type"],
+        precision=cfg["quant"],
+        adb_serial=args.adb_serial,
+        remote_workdir=args.remote_workdir,
+        qnn_lib=args.qnn_lib,
+        backend=args.backend,
+        no_qnn=args.no_qnn,
+        shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
+        shared_meta=shared_candidate_inputs["meta"],
+    )
+
+
 def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
     if cfg["backend"] == "pt":
         return PTRawModel(cfg["path"], cfg["family"], cfg["head"])
@@ -1313,32 +1343,7 @@ def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
         return TFLiteRawModel(cfg["path"])
 
     if cfg["backend"] == "qairt":
-        if args.candidate_on_device:
-            if shared_candidate_inputs is None:
-                raise RuntimeError(
-                    "shared candidate inputs are required for on-device QAIRT mode"
-                )
-            print(f"{cfg['quant']} QAIRT inference mode: IQ9 via adb")
-            return ADBQAIRTRawModel(
-                model_path=cfg["path"],
-                model_type=cfg["model_type"],
-                precision=cfg["quant"],
-                adb_serial=args.adb_serial,
-                remote_workdir=args.remote_workdir,
-                qnn_lib=args.qnn_lib,
-                backend=args.backend,
-                no_qnn=args.no_qnn,
-                shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
-                shared_meta=shared_candidate_inputs["meta"],
-            )
-        return QAIRTRawModel(
-            model_path=cfg["path"],
-            model_type=cfg["model_type"],
-            precision=cfg["quant"],
-            qnn_lib=args.qnn_lib,
-            backend=args.backend,
-            no_qnn=args.no_qnn,
-        )
+        return _build_qairt_runner(cfg, args, shared_candidate_inputs)
 
     if cfg["backend"] == "onnx":
         if args.candidate_on_device:
