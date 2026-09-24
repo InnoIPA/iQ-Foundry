@@ -270,6 +270,59 @@ def resolve_qairt_backend_path(qnn_lib: str) -> str:
     return qnn_lib
 
 
+def parse_netrun_seconds(profile_text: str) -> float | None:
+    """Per-inference NetRun time from qnn-profile-viewer, in seconds.
+
+    This is the same figure as the benchmark's "netrun latency" column: one full
+    inference call including the FastRPC round trip, excluding file I/O.
+    """
+    if not profile_text:
+        return None
+    section = profile_text.split("Execute Stats (Average)")[-1]
+    for line in section.splitlines():
+        if "NetRun:" in line:
+            try:
+                return float(line.split(":")[-1].strip().split()[0]) / 1e6
+            except (ValueError, IndexError):
+                return None
+    return None
+
+
+def read_local_netrun_seconds(output_dir: str) -> float | None:
+    """Run qnn-profile-viewer on a local qnn-net-run output directory."""
+    log_path = os.path.join(output_dir, "qnn-profiling-data_0.log")
+    if not os.path.exists(log_path):
+        return None
+    try:
+        return parse_netrun_seconds(
+            run_qairt_tool(
+                "qnn-profile-viewer", [f"--input_log={log_path}"], "profile-viewer"
+            )
+        )
+    except RuntimeError:
+        return None
+
+
+def read_remote_netrun_seconds(adb_serial: str | None, remote_out_dir: str):
+    """Run qnn-profile-viewer on the target and parse its NetRun average."""
+    try:
+        completed = subprocess.run(
+            (["adb"] + (["-s", adb_serial] if adb_serial else []))
+            + [
+                "shell",
+                f"qnn-profile-viewer --input_log "
+                f"{remote_out_dir}/qnn-profiling-data_0.log",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    return parse_netrun_seconds(completed.stdout)
+
+
 # --- runners ------------------------------------------------------------------
 class QAIRTRawModel:
     """Runs the context binary locally. Only valid on the IQ9 target itself."""
@@ -293,7 +346,8 @@ class QAIRTRawModel:
             )
         self.meta = load_qairt_model_metadata(model_path, model_type, precision)
         self.backend_lib = resolve_qairt_backend_path(qnn_lib)
-        self.last_invoke_time_s = 0.0
+        self.last_invoke_time_s = None
+        self.device_time_included = True
         self._tmp = tempfile.TemporaryDirectory(prefix="qairt_local_")
 
     def cleanup(self) -> None:
@@ -316,7 +370,6 @@ class QAIRTRawModel:
             handle.write(raw_path + "\n")
 
         out_dir = os.path.join(work, "out")
-        t0 = time.perf_counter()
         run_qairt_tool(
             "qnn-net-run",
             [
@@ -325,10 +378,12 @@ class QAIRTRawModel:
                 f"--input_list={list_path}",
                 f"--output_dir={out_dir}",
                 "--perf_profile=burst",
+                "--profiling_level=basic",
             ],
             "net-run",
         )
-        self.last_invoke_time_s = time.perf_counter() - t0
+        # Reported invoke time is qnn-net-run's own NetRun average, not wall clock.
+        self.last_invoke_time_s = read_local_netrun_seconds(out_dir)
         boxes, scores = _read_result_pair(os.path.join(out_dir, "Result_0"), self.meta)
         return (
             boxes,
@@ -373,7 +428,9 @@ class ADBQAIRTRawModel:
         self.backend_lib = resolve_qairt_backend_path(qnn_lib)
         self.shared_remote_input_dir = shared_remote_input_dir
         self.shared_meta = shared_meta or {}
-        self.last_invoke_time_s = 0.0
+        self.last_invoke_time_s = None
+        # Results are fetched in prepare_batch, outside the per-image loop.
+        self.device_time_included = False
         self.remote_dir = (
             f"{remote_workdir.rstrip('/')}/qairt_run_{os.getpid()}_"
             f"{int(time.time() * 1000)}"
@@ -398,16 +455,17 @@ class ADBQAIRTRawModel:
         _adb_push(self.adb_serial, list_local, f"{self.remote_dir}/input_list.txt")
 
         remote_out = f"{self.remote_dir}/out"
-        t0 = time.perf_counter()
         _adb_shell(
             self.adb_serial,
             f"cd {self.remote_dir} && rm -rf out && qnn-net-run "
             f"--backend {self.backend_lib} "
             f"--retrieve_context {self.remote_model} "
-            f"--input_list input_list.txt --output_dir out --perf_profile burst",
+            f"--input_list input_list.txt --output_dir out --perf_profile burst "
+            f"--profiling_level basic",
         )
-        elapsed = time.perf_counter() - t0
-        self.last_invoke_time_s = elapsed / max(len(order), 1)
+        self.last_invoke_time_s = read_remote_netrun_seconds(
+            self.adb_serial, remote_out
+        )
 
         local_out = os.path.join(self._pulled.name, "out")
         shutil.rmtree(local_out, ignore_errors=True)
@@ -568,6 +626,7 @@ class _AdbBatchTestRunner:
         self._results = results
         self._order = order
         self.last_invoke_time_s = inner.last_invoke_time_s
+        self.device_time_included = False
 
     def infer_raw(self, image_path: str):
         key = str(image_path)
@@ -663,15 +722,17 @@ def run_qairt_test_inference_adb(
                 handle.write(listing + "\n")
             _adb_push(adb_serial, list_local, f"{runner.remote_dir}/input_list.txt")
 
-            t0 = time.perf_counter()
             _adb_shell(
                 adb_serial,
                 f"cd {runner.remote_dir} && rm -rf out && qnn-net-run "
                 f"--backend {runner.backend_lib} "
                 f"--retrieve_context {runner.remote_model} "
-                f"--input_list input_list.txt --output_dir out --perf_profile burst",
+                f"--input_list input_list.txt --output_dir out --perf_profile burst "
+                f"--profiling_level basic",
             )
-            runner.last_invoke_time_s = (time.perf_counter() - t0) / len(image_files)
+            runner.last_invoke_time_s = read_remote_netrun_seconds(
+                adb_serial, f"{runner.remote_dir}/out"
+            )
 
             pulled = tempfile.TemporaryDirectory(prefix="qairt_test_out_")
             _adb_pull(adb_serial, f"{runner.remote_dir}/out", pulled.name)

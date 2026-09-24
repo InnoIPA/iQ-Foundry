@@ -1136,15 +1136,29 @@ def _run_test_directory(
             )
             t1 = time.perf_counter()
             processed += 1
-            total_time_s += t1 - t0
-            invoke_time_s += runner.last_invoke_time_s
+            elapsed = t1 - t0
+            invoke_s = runner.last_invoke_time_s
+            # Batched runners fetch results before the loop, so their device time
+            # is not inside the measured span and must be added back in.
+            if not getattr(runner, "device_time_included", True):
+                elapsed += invoke_s or 0.0
+            total_time_s += elapsed
+            if invoke_s is None:
+                invoke_time_s = None
+            elif invoke_time_s is not None:
+                invoke_time_s += invoke_s
             print(f"{image_file.name}: flow={flow} preNMS={pre_nms} kept={written}")
 
         if processed > 0:
             print("=== Inference Timing Summary ===")
             print(f"processed={processed}")
             print(f"avg_total_inference_ms={(total_time_s / processed) * 1000.0:.3f}")
-            print(f"avg_model_invoke_ms={(invoke_time_s / processed) * 1000.0:.3f}")
+            if invoke_time_s is None:
+                print("avg_model_invoke_ms=n/a")
+            else:
+                print(
+                    f"avg_model_invoke_ms={(invoke_time_s / processed) * 1000.0:.3f}"
+                )
 
         if not _has_meaningful_outputs(staging_output_dir):
             raise RuntimeError(
