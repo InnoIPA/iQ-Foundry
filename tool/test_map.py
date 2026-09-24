@@ -1734,13 +1734,17 @@ def run_pair_map_eval(
     local_target_requirements = str(
         Path(__file__).resolve().parent.parent / "requirements" / "target.txt"
     )
-    remote_python = ensure_adb_runtime_venv(
-        adb_serial=adb_serial,
-        local_requirements_path=local_target_requirements,
-        local_ort_qnn_wheel_path=(
-            DEFAULT_ORT_QNN_WHEEL if runtime == "onnx" else None
-        ),
-    )
+    # QAIRT runs the target's own qnn-net-run, so no device venv is provisioned.
+    if runtime == "qairt":
+        remote_python = None
+    else:
+        remote_python = ensure_adb_runtime_venv(
+            adb_serial=adb_serial,
+            local_requirements_path=local_target_requirements,
+            local_ort_qnn_wheel_path=(
+                DEFAULT_ORT_QNN_WHEEL if runtime == "onnx" else None
+            ),
+        )
     remote_layout = make_map_remote_run_layout(
         remote_workdir=remote_workdir,
         converted_model_path=effective_converted_model_path,
