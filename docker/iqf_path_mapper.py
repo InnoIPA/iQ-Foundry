@@ -193,7 +193,7 @@ def _empty_config() -> dict:
 def _invalid_legacy_config_message(config_path: Path) -> str:
     return (
         f"[error] Saved wrapper config at {config_path} is incompatible with iQ-Foundry "
-        "v0.0.3. Re-run './docker/iqf configure <mode> --type <type> --runtime <runtime> "
+        "v1.0.0. Re-run './docker/iqf configure <mode> --type <type> --runtime <runtime> "
         "--precision <precision>' to recreate it."
     )
 

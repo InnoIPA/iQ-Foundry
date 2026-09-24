@@ -214,7 +214,7 @@ def _extract_passthrough_option_value(argv: list[str], option: str) -> str | Non
 
 def _runtime_precision_required_message() -> str:
     return (
-        "[error] v0.0.3 requires both --runtime and --precision.\n"
+        "[error] v1.0.0 requires both --runtime and --precision.\n"
         "Example:\n"
         "  ./docker/iqf run qc --type yolov26 --runtime litert --precision int8"
     )
@@ -222,7 +222,7 @@ def _runtime_precision_required_message() -> str:
 
 def _deprecated_model_flag_message() -> str:
     return (
-        "[error] --fp-model and --int-model are deprecated in iQ-Foundry v0.0.3.\n"
+        "[error] --fp-model and --int-model are deprecated in iQ-Foundry v1.0.0.\n"
         "Use:\n"
         "  --reference-model\n"
         "  --converted-model"
@@ -240,15 +240,15 @@ def _unsupported_runtime_or_precision_message(
     runtime: str | None, precision: str | None
 ) -> str:
     if runtime not in RUNTIME_CHOICES:
-        detail = f"Unsupported runtime for iQ-Foundry v0.0.3: {runtime}"
+        detail = f"Unsupported runtime for iQ-Foundry v1.0.0: {runtime}"
     else:
-        detail = f"Unsupported precision for iQ-Foundry v0.0.3: {precision}"
+        detail = f"Unsupported precision for iQ-Foundry v1.0.0: {precision}"
     return f"[error] {detail}\n\n{_supported_matrix_message()}"
 
 
 def _unsupported_runtime_precision_message(runtime: str, precision: str) -> str:
     return (
-        "[error] Unsupported combination does not exist in iQ-Foundry v0.0.3:\n"
+        "[error] Unsupported combination does not exist in iQ-Foundry v1.0.0:\n"
         f"        runtime={runtime}, precision={precision}\n\n"
         f"{_supported_matrix_message()}"
     )

@@ -1149,7 +1149,7 @@ def print_supported_runtime_precision_matrix() -> None:
 
 def _runtime_precision_required_message() -> str:
     return (
-        f"{color_text('[error] v0.0.3 requires both --runtime and --precision.', ANSI_RED)}\n"
+        f"{color_text('[error] v1.0.0 requires both --runtime and --precision.', ANSI_RED)}\n"
         "Example:\n"
         f"  {color_text(WRAPPER_RUNTIME_PRECISION_EXAMPLE, ANSI_WHITE)}"
     )
@@ -1157,7 +1157,7 @@ def _runtime_precision_required_message() -> str:
 
 def _deprecated_model_flag_message() -> str:
     return (
-        f"{color_text('[error] --fp-model and --int-model are deprecated in iQ-Foundry v0.0.3.', ANSI_RED)}\n"
+        f"{color_text('[error] --fp-model and --int-model are deprecated in iQ-Foundry v1.0.0.', ANSI_RED)}\n"
         "Use:\n"
         f"  {color_text('--reference-model', ANSI_WHITE)}\n"
         f"  {color_text('--converted-model', ANSI_WHITE)}"
@@ -1166,7 +1166,7 @@ def _deprecated_model_flag_message() -> str:
 
 def _unsupported_runtime_precision_message(runtime: str, precision: str) -> str:
     return (
-        f"{color_text('[error] Unsupported combination does not exist in iQ-Foundry v0.0.3:', ANSI_RED)}\n"
+        f"{color_text('[error] Unsupported combination does not exist in iQ-Foundry v1.0.0:', ANSI_RED)}\n"
         f"        {color_text(f'runtime={runtime}, precision={precision}', ANSI_WHITE)}\n\n"
         f"{build_supported_runtime_precision_matrix()}"
     )
@@ -1177,9 +1177,9 @@ def _unsupported_runtime_or_precision_value_message(
     precision: str | None,
 ) -> str:
     if runtime not in RUNTIME_CHOICES:
-        detail = f"Unsupported runtime for iQ-Foundry v0.0.3: {runtime}"
+        detail = f"Unsupported runtime for iQ-Foundry v1.0.0: {runtime}"
     else:
-        detail = f"Unsupported precision for iQ-Foundry v0.0.3: {precision}"
+        detail = f"Unsupported precision for iQ-Foundry v1.0.0: {precision}"
     return (
         f"{color_text(f'[error] {detail}', ANSI_RED)}\n\n"
         f"{build_supported_runtime_precision_matrix()}"
