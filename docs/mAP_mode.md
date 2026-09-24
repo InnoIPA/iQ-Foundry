@@ -1,6 +1,6 @@
 # mAP Mode
 
-`mAP` mode compares a reference YOLO `.pt` model against a converted LiteRT or ONNX counterpart
+`mAP` mode compares a reference YOLO `.pt` model against a converted LiteRT, ONNX, or QAIRT counterpart
 and reports the `mAP@0.5` difference between the two. Use this mode to validate whether the
 converted model preserves the expected detection quality before moving to broader testing or
 deployment.
@@ -24,9 +24,21 @@ deployment.
 | `litert` | `fp32` | `.tflite` |
 | `onnx` | `fp32` | `.onnx` or compatible `.onnx.zip` bundle |
 | `onnx` | `w8a16` | `.onnx` or compatible `.onnx.zip` bundle |
+| `qairt` | `int8` | `.bin` HTP context binary |
+| `qairt` | `w8a16` | `.bin` HTP context binary |
+| `qairt` | `fp16` | `.bin` HTP context binary |
 
 For host setup, start from [README.md](../README.md) and choose either
 [Ubuntu_host.md](../Ubuntu_host.md) or [Windows_host.md](../Windows_host.md).
+
+> [!IMPORTANT]
+> ADB mode runs inside the container. If a host-side `adb` server already holds the USB
+> interface, the container sees no device and the run fails with `no devices/emulators found`
+> or an opaque non-zero exit. Release it on the host first:
+>
+> ```bash
+> adb kill-server
+> ```
 
 ## Representative Commands
 
@@ -96,6 +108,7 @@ In the current implementation:
 - `--converted-model` pointing to the converted model:
   - LiteRT: `.tflite`
   - ONNX Runtime: `.onnx` or compatible `.onnx.zip`
+  - QAIRT: `.bin` HTP context binary
 
 When you use the wrapper, pass the path flags directly or save them first through
 `./docker/iqf configure mAP --type <type> --runtime <runtime> --precision <precision>`.
@@ -179,13 +192,14 @@ always uses its default head and ignores `--fp-head`.
 | `--remote-workdir` | Remote working directory on the target. | `/data/local/tmp/yolo_map_eval` |
 | `--remote-runner-local` | Local path to the remote runner script. | LiteRT default: `tool/remote_tflite_raw_runner.py`; ONNX effective default: `tool/onnx_inference.py` |
 | `--remote-runner-remote` | Target path where the remote runner is pushed. | LiteRT default: `/data/local/tmp/yolo_map_eval/remote_tflite_raw_runner.py`; ONNX effective default: `/data/local/tmp/yolo_map_eval/onnx_inference.py` |
-| `--qnn-lib` | LiteRT delegate library path or ONNX Runtime QNN backend path. | LiteRT: `/usr/lib/libQnnTFLiteDelegate.so`; ONNX effective default: `libQnnHtp.so` |
-| `--backend` | Delegate backend. Ignored by ONNX Runtime paths. | `htp` |
-| `--no-qnn` | Disable the LiteRT QNN delegate or ONNX Runtime QNN EP and use the CPU path instead. | off |
+| `--qnn-lib` | LiteRT delegate library path, ONNX Runtime QNN backend path, or QAIRT backend library. | LiteRT: `/usr/lib/libQnnTFLiteDelegate.so`; ONNX and QAIRT effective default: `libQnnHtp.so` |
+| `--backend` | Delegate backend. Ignored by ONNX Runtime and QAIRT paths. | `htp` |
+| `--no-qnn` | Disable the LiteRT QNN delegate or ONNX Runtime QNN EP and use the CPU path instead. Rejected by QAIRT. | off |
 
 
 ## Notes
 
 - `mAP` uses `--reference-model` and `--converted-model`. The old `--fp-model` and `--int-model` flags are deprecated and rejected.
-- ONNX Runtime candidate paths accept `.onnx` and compatible `.onnx.zip` bundles. Bundles are extracted automatically before evaluation.
+- ONNX Runtime candidate paths accept `.onnx` and compatible `.onnx.zip` bundles. QAIRT candidate
+paths accept the `.bin` context binary produced by `qc` mode, and provision nothing on the target. Bundles are extracted automatically before evaluation.
 - It is recommended to start with the default settings. For `yolov10` and `yolov26`, if the converted model was produced with `--qc-head one2one`, update `--fp-head` to `one2one` so the reference path matches the converted model.
