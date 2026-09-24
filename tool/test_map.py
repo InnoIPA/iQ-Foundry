@@ -50,6 +50,21 @@ except ModuleNotFoundError:
         resolve_onnx_model_artifact,
     )
 
+try:
+    from tool.qairt_inference import (
+        ADBQAIRTRawModel,
+        QAIRTRawModel,
+        load_qairt_model_metadata,
+        prepare_shared_qairt_inputs,
+    )
+except ModuleNotFoundError:
+    from qairt_inference import (
+        ADBQAIRTRawModel,
+        QAIRTRawModel,
+        load_qairt_model_metadata,
+        prepare_shared_qairt_inputs,
+    )
+
 DEFAULT_REMOTE_RUNNER_LOCAL = str(
     Path(__file__).resolve().parent / "remote_tflite_raw_runner.py"
 )
@@ -1256,6 +1271,12 @@ def validate_eval_class_count_compatibility(
             model_type=model_type,
             precision=precision,
         ).class_count
+    elif runtime == "qairt":
+        candidate_class_count = load_qairt_model_metadata(
+            str(converted_model_path),
+            model_type=model_type,
+            precision=precision,
+        ).class_count
     else:
         raise RuntimeError(f"Unsupported runtime for class-count validation: {runtime}")
     if candidate_class_count != fp_class_count:
@@ -1290,6 +1311,34 @@ def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
                 shared_meta=shared_candidate_inputs["meta"],
             )
         return TFLiteRawModel(cfg["path"])
+
+    if cfg["backend"] == "qairt":
+        if args.candidate_on_device:
+            if shared_candidate_inputs is None:
+                raise RuntimeError(
+                    "shared candidate inputs are required for on-device QAIRT mode"
+                )
+            print(f"{cfg['quant']} QAIRT inference mode: IQ9 via adb")
+            return ADBQAIRTRawModel(
+                model_path=cfg["path"],
+                model_type=cfg["model_type"],
+                precision=cfg["quant"],
+                adb_serial=args.adb_serial,
+                remote_workdir=args.remote_workdir,
+                qnn_lib=args.qnn_lib,
+                backend=args.backend,
+                no_qnn=args.no_qnn,
+                shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
+                shared_meta=shared_candidate_inputs["meta"],
+            )
+        return QAIRTRawModel(
+            model_path=cfg["path"],
+            model_type=cfg["model_type"],
+            precision=cfg["quant"],
+            qnn_lib=args.qnn_lib,
+            backend=args.backend,
+            no_qnn=args.no_qnn,
+        )
 
     if cfg["backend"] == "onnx":
         if args.candidate_on_device:
@@ -1355,7 +1404,7 @@ def evaluate_one_model(
     all_preds = []
     skipped_unmapped_predictions = 0
 
-    is_adb_batch = isinstance(runner, (ADBTFLiteRawModel, ADBORTRawModel))
+    is_adb_batch = hasattr(runner, "prepare_batch")
     print(_format_run_location(model_key, cfg, is_adb_batch))
 
     if is_adb_batch:
@@ -1599,7 +1648,7 @@ def _build_model_cfgs(
         "path": str(reference_model_path),
     }
     candidate_cfg = {
-        "backend": "tflite" if runtime == "litert" else "onnx",
+        "backend": {"litert": "tflite", "qairt": "qairt"}.get(runtime, "onnx"),
         "family": family,
         "head": "default",
         "model_type": model_type,
@@ -1767,6 +1816,19 @@ def run_pair_map_eval(
                 adb_serial=adb_serial,
                 remote_input_dir=remote_layout["remote_input_dir"],
                 artifact=onnx_candidate_artifact,
+            )
+            shared_candidate_inputs = {
+                "meta": shared_meta,
+                "remote_input_dir": remote_layout["remote_input_dir"],
+            }
+        elif runtime == "qairt":
+            shared_inputs_obj, shared_meta, _, _ = prepare_shared_qairt_inputs(
+                images=imgs,
+                model_path=str(effective_converted_model_path),
+                model_type=model_type,
+                precision=precision,
+                adb_serial=adb_serial,
+                remote_input_dir=remote_layout["remote_input_dir"],
             )
             shared_candidate_inputs = {
                 "meta": shared_meta,
