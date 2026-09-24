@@ -1,5 +1,28 @@
 # Changelogs
 
+## v1.0.0
+
+### features
+- Added QAIRT (Qualcomm AI Runtime) support for `qc`, `test`, and `mAP`, covering QAIRT INT8, W8A16, and FP16 flows for `yolov10`, `yolov11`, and `yolov26`.
+- Added offline conversion for QAIRT: `qc` builds a pre-compiled HTP context binary locally through ONNX export, `qairt-converter`, `qairt-quantizer`, and `qnn-context-binary-generator`, with no Qualcomm AI Hub account and no device-side compilation.
+- Added the `fp16` precision, supported by QAIRT only, and extended the supported matrix to `qairt/int8`, `qairt/w8a16`, and `qairt/fp16`.
+- Added `tool/qairt_inference.py` for QAIRT execution, reusing the shared geometry, decode, NMS, and drawing helpers so all three runtimes produce identical detections from identical tensors.
+- Added the vendored QAIRT `2.47.0.260601` host toolchain under `vendor/qairt/`, including the five OS libraries the container image does not provide, so no image rebuild is required.
+- Added QAIRT `.bin` output naming for `qc`, and QAIRT rows to the runtime and precision matrix in both `./docker/iqf` and backend `cli.py`.
+
+### docs
+- Updated `README.md` with a QAIRT runtime logo cell, an `FP16` column in the runtime-versus-precision support matrix, and a v1.0.0 feature callout.
+- Reworked `docs/qc_mode.md`, `docs/test_mode.md`, and `docs/mAP_mode.md` to document the QAIRT matrix, QAIRT calibration behavior, context-binary handling, and runtime-specific execution notes.
+- Scoped the Qualcomm AI Hub references to `litert` and `onnx`, since `qairt` converts offline and needs no API token.
+- Added an ADB troubleshooting note to `docs/test_mode.md` and `docs/mAP_mode.md` covering the host-side `adb` server holding the USB interface.
+- Updated `Ubuntu_host.md` and `Windows_host.md` with the QAIRT runtime and precision combinations.
+- Documented the vendored QAIRT SDK in `requirements/host.txt` and recorded that the QAIRT target path installs nothing on device.
+
+### fixes
+- Fixed QAIRT test mode to report `avg_model_invoke_ms` from `qnn-profile-viewer` NetRun timing instead of batch wall clock, and to include device inference time in `avg_total_inference_ms` for batched runs.
+- Fixed QAIRT backend resolution so the LiteRT delegate default for `--qnn-lib` no longer leaks into the QAIRT runtime.
+- Fixed user-facing version strings in `cli.py` and `./docker/iqf` to report v1.0.0.
+
 ## v0.0.3
 
 ### features
