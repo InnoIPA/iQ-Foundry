@@ -1532,6 +1532,17 @@ def _run_test_mode(args: argparse.Namespace) -> None:
         )
 
         runner = run_test_inference_adb if args.adb else run_test_inference_local
+    elif args.runtime == "qairt":
+        from tool.qairt_inference import (
+            run_qairt_test_inference_adb,
+            run_qairt_test_inference_local,
+        )
+
+        runner = (
+            run_qairt_test_inference_adb
+            if args.adb
+            else run_qairt_test_inference_local
+        )
     else:
         from tool.onnx_inference import (
             run_onnx_test_inference_adb,
@@ -1558,7 +1569,7 @@ def _run_test_mode(args: argparse.Namespace) -> None:
         "qnn_lib": args.qnn_lib,
         "backend": args.backend,
     }
-    if args.runtime == "onnx":
+    if args.runtime in {"onnx", "qairt"}:
         runner_kwargs["runtime"] = args.runtime
         runner_kwargs["precision"] = args.precision
     if args.adb:

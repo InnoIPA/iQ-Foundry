@@ -32,6 +32,7 @@ import tempfile
 import time
 
 from tool.onnx_inference import (
+    DEFAULT_TFLITE_QNN_LIB,
     IMG_H,
     IMG_W,
     QuantParams,
@@ -257,6 +258,18 @@ def _read_result_pair(result_dir: str, meta: QAIRTModelMeta):
     return boxes, scores
 
 
+def resolve_qairt_backend_path(qnn_lib: str) -> str:
+    """Map the LiteRT delegate default onto the HTP backend QAIRT actually loads."""
+    if not qnn_lib or qnn_lib == DEFAULT_TFLITE_QNN_LIB:
+        if qnn_lib == DEFAULT_TFLITE_QNN_LIB:
+            print(
+                "[warn] The LiteRT default --qnn-lib path does not apply to the "
+                f"QAIRT runtime. Using {DEFAULT_QAIRT_BACKEND} instead."
+            )
+        return DEFAULT_QAIRT_BACKEND
+    return qnn_lib
+
+
 # --- runners ------------------------------------------------------------------
 class QAIRTRawModel:
     """Runs the context binary locally. Only valid on the IQ9 target itself."""
@@ -279,7 +292,7 @@ class QAIRTRawModel:
                 "is pre-compiled for the HTP and has no CPU fallback."
             )
         self.meta = load_qairt_model_metadata(model_path, model_type, precision)
-        self.backend_lib = qnn_lib or DEFAULT_QAIRT_BACKEND
+        self.backend_lib = resolve_qairt_backend_path(qnn_lib)
         self.last_invoke_time_s = 0.0
         self._tmp = tempfile.TemporaryDirectory(prefix="qairt_local_")
 
@@ -357,7 +370,7 @@ class ADBQAIRTRawModel:
             )
         self.meta = load_qairt_model_metadata(model_path, model_type, precision)
         self.adb_serial = adb_serial
-        self.backend_lib = qnn_lib or DEFAULT_QAIRT_BACKEND
+        self.backend_lib = resolve_qairt_backend_path(qnn_lib)
         self.shared_remote_input_dir = shared_remote_input_dir
         self.shared_meta = shared_meta or {}
         self.last_invoke_time_s = 0.0
