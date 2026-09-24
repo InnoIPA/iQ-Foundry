@@ -33,13 +33,18 @@ DEFAULT_DOCKERFILE = "docker/Dockerfile"
 DOCKER_CONFIG_RELATIVE_PATH = Path(".iqf") / "docker-paths.json"
 MODE_CHOICES = ("qc", "mAP", "test")
 MODEL_TYPES = ("yolov10", "yolov11", "yolov26")
-RUNTIME_CHOICES = ("litert", "onnx")
-PRECISION_CHOICES = ("fp32", "int8", "w8a16")
+RUNTIME_CHOICES = ("litert", "onnx", "qairt")
+PRECISION_CHOICES = ("fp32", "int8", "w8a16", "fp16")
 SUPPORTED_RUNTIME_PRECISION_ROWS = (
     ("litert", "int8", "Existing LiteRT/TFLite INT8 path"),
     ("litert", "fp32", "LiteRT/TFLite FP32 path"),
     ("onnx", "fp32", "ONNX Runtime FP32 path"),
     ("onnx", "w8a16", "ONNX Runtime W8A16 path"),
+    # QAIRT builds a pre-compiled HTP context binary offline. FP32 is absent because
+    # HTP has no FP32 math; a float graph runs as FP16 and only FP16 finalizes on v73.
+    ("qairt", "int8", "QAIRT HTP context binary W8A8 path"),
+    ("qairt", "w8a16", "QAIRT HTP context binary W8A16 path"),
+    ("qairt", "fp16", "QAIRT HTP context binary FP16 path"),
 )
 SUPPORTED_RUNTIME_PRECISION_COMBINATIONS = {
     (runtime, precision)
@@ -360,7 +365,10 @@ def _persisted_kind(mode: str, field_name: str) -> str:
 
 
 def qc_requires_calibration(runtime: str, precision: str) -> bool:
-    return not (runtime in {"litert", "onnx"} and precision == "fp32")
+    # Float precisions carry no calibration step: litert/onnx fp32 and qairt fp16.
+    if runtime in {"litert", "onnx"} and precision == "fp32":
+        return False
+    return not (runtime == "qairt" and precision == "fp16")
 
 
 def merge_required_input_paths(

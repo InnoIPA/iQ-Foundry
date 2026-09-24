@@ -43,18 +43,25 @@ WARNING_HOLD_SECONDS = 1.2
 NOTICE_HOLD_SECONDS = 3.0
 
 MODEL_TYPES = ("yolov10", "yolov11", "yolov26")
-RUNTIME_CHOICES = ("litert", "onnx")
-PRECISION_CHOICES = ("fp32", "int8", "w8a16")
+RUNTIME_CHOICES = ("litert", "onnx", "qairt")
+PRECISION_CHOICES = ("fp32", "int8", "w8a16", "fp16")
 SUPPORTED_RUNTIME_PRECISION_ROWS = (
     ("litert", "int8", "Existing LiteRT/TFLite INT8 path"),
     ("litert", "fp32", "LiteRT/TFLite FP32 path"),
     ("onnx", "fp32", "ONNX Runtime FP32 path"),
     ("onnx", "w8a16", "ONNX Runtime W8A16 path"),
+    # QAIRT builds a pre-compiled HTP context binary offline. FP32 is absent because
+    # HTP has no FP32 math; a float graph runs as FP16 and only FP16 finalizes on v73.
+    ("qairt", "int8", "QAIRT HTP context binary W8A8 path"),
+    ("qairt", "w8a16", "QAIRT HTP context binary W8A16 path"),
+    ("qairt", "fp16", "QAIRT HTP context binary FP16 path"),
 )
 SUPPORTED_RUNTIME_PRECISION_COMBINATIONS = {
     (runtime, precision)
     for runtime, precision, _ in SUPPORTED_RUNTIME_PRECISION_ROWS
 }
+# Converted-artifact extension per runtime.
+QC_OUTPUT_SUFFIXES = {"litert": ".tflite", "onnx": ".onnx", "qairt": ".bin"}
 WRAPPER_RUNTIME_PRECISION_EXAMPLE = (
     "./docker/iqf run qc --type yolov26 --runtime litert --precision int8"
 )
@@ -1249,7 +1256,8 @@ def resolve_default_qc_output_path(
     if output_override:
         return output_override
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    suffix = ".tflite" if runtime == "litert" else ".onnx"
+    # qairt emits a pre-compiled HTP context binary, not a framework model file.
+    suffix = QC_OUTPUT_SUFFIXES[runtime]
     stem = f"{model_type}_{runtime}_{precision}_{ts}"
     return str(DEFAULT_QC_RESULTS_DIR / model_type / f"{stem}{suffix}")
 
@@ -1313,7 +1321,10 @@ def validate_runtime_precision(args: argparse.Namespace) -> None:
 
 
 def qc_requires_calibration(runtime: str, precision: str) -> bool:
-    return not (runtime in {"litert", "onnx"} and precision == "fp32")
+    # Float precisions carry no calibration step: litert/onnx fp32 and qairt fp16.
+    if runtime in {"litert", "onnx"} and precision == "fp32":
+        return False
+    return not (runtime == "qairt" and precision == "fp16")
 
 
 def is_iq9_runtime() -> bool:
