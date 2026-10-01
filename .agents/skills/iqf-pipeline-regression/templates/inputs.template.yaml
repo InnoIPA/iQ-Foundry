@@ -1,0 +1,93 @@
+# iQ-Foundry pipeline regression inputs.
+#
+# Fill every value from the user's answers. Do NOT invent or guess paths.
+# Use absolute paths. Relative paths are resolved against repo_root.
+# Leave optional values as null when the user did not give one.
+#
+# NEVER put the QAI Hub token in this file, not even in a comment. The token is passed only
+# through the IQF_QAI_HUB_TOKEN environment variable to the `hub-login` command. The runner
+# rejects token-like keys here, and `hub-login` refuses to run if the token appears in any
+# file of the run directory.
+
+# [required] Absolute path of the iQ-Foundry checkout to test (contains docker/iqf).
+repo_root: null
+
+# [required] Docker image tag used for every stage, e.g. the tag shown by `docker images`.
+docker_image: null
+
+# [required] Which pipelines to run. Preferred: the pipeline numbers from the NO column of
+# `run_pipelines.py list`. Any mix of these is accepted:
+#   - pipeline numbers, e.g. [3, 7, 15]
+#   - number ranges (quoted), e.g. ["1-7"]
+#   - pipeline ids, e.g. [yolov26-litert-fp32]
+#   - glob patterns (quoted), e.g. ["yolov26-*"] or ["*-qairt-*"]
+#   - all
+pipelines: []
+
+# [optional] Modes to run for every selected pipeline, always executed in the order qc -> mAP -> test.
+# Default: [qc, mAP, test]
+modes: [qc, mAP, test]
+
+# [required for qc and mAP] One .pt file per model type used by the selected pipelines.
+# qc converts it; mAP uses it as the reference model. Remove types that are not selected.
+models_pt:
+  yolov10: null
+  yolov11: null
+  yolov26: null
+
+# [required when a selected pipeline needs calibration: litert/int8, onnx/w8a16, qairt/int8, qairt/w8a16]
+calibration:
+  dir: null          # directory of calibration images
+  max_calib: null    # optional integer; null = product default (200)
+
+# [required for mAP]
+map:
+  annotations: null  # COCO instances json (or a YOLO/VOC label directory)
+  images: null       # directory with the evaluation images
+  max_images: null   # optional integer; null = product default (300)
+
+# [required for test] Set exactly ONE of image / images.
+test:
+  image: null        # a single test image file
+  images: null       # a directory of test images
+  yaml: null         # class-names yaml (has a `names:` list), e.g. coco.yaml
+
+# [optional] adb serial of the target. null = the single attached device.
+# Required when more than one device is attached.
+device:
+  adb_serial: null
+
+# QAI Hub login used by qc (litert/onnx build on QAI Hub; docker/iqf mounts ~/.qai_hub for every qc).
+#   true  = reuse the existing ~/.qai_hub/client.ini
+#   false = the user supplied a token; run `hub-login` before validating
+qai_hub:
+  use_existing_login: true
+
+# [optional] Pre-built converted model per pipeline id. When set, qc is SKIPPED for that
+# pipeline and mAP/test use this file. Extension must match the runtime
+# (.tflite for litert, .onnx for onnx, .bin for qairt).
+# Example:  yolov26-litert-int8: /abs/path/model.tflite
+prebuilt_models: {}
+
+# [optional] Extra backend flags appended to every stage of that mode, exactly as typed by the user.
+# Flags the runner sets itself (paths, --type/--runtime/--precision, --output, --adb, --adb-serial,
+# --max_calib, --max-images, --save, --dry-run) are rejected by validation.
+# Example:  mAP: ["--conf", "0.25"]
+extra_flags:
+  qc: []
+  mAP: []
+  test: []
+
+# [optional] Extra flags for one pipeline only, appended after extra_flags.
+# Example:
+#   yolov26-litert-int8:
+#     qc: ["--qc-head", "one2one"]
+pipeline_extra_flags: {}
+
+# [optional] Per-mode time limit override in seconds (defaults live in regression/pipelines.yaml).
+# Example:  qc: 5400
+timeouts_s: {}
+
+# [optional] Where logs, artifacts, results.json and report.md go.
+# null = the directory that contains this inputs file (the run directory made by `init`).
+output_dir: null
