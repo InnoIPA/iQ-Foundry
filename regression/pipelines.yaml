@@ -1,0 +1,89 @@
+# Copyright 2026 Innodisk Corp.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Regression pipeline definitions consumed by tool/test/regression/run_pipelines.py.
+#
+# A pipeline is one (model type, runtime, precision) combination, exercised end to end
+# through the documented Docker wrapper in this order:
+#     qc   (.pt -> converted model, host)
+#     mAP  (reference .pt vs converted model, converted model runs on the device via adb)
+#     test (converted model inference on the device via adb)
+#
+# The runner cross-checks this file against docker/iqf_path_mapper.py:
+#   - every (runtime, precision) must be in SUPPORTED_RUNTIME_PRECISION_COMBINATIONS
+#   - needs_calibration must equal qc_requires_calibration(runtime, precision)
+#   - supported combinations missing from this file are reported as coverage drift
+# Add a pipeline here when the product gains a new type/runtime/precision.
+#
+# `num` is the pipeline's short numeric ID. Users pick pipelines by this number (e.g. 1, 5, 15
+# or a range 1-7) as well as by `id`. Numbers are permanent: never renumber or reuse one.
+# Give a new pipeline the next unused number, even if it is listed in the middle.
+
+schema_version: 1
+
+defaults:
+  # Modes run in this order for every pipeline unless the inputs file narrows them.
+  modes: [qc, mAP, test]
+  # Per-mode wall-clock limit in seconds. A stage over its limit is killed and marked TIMEOUT.
+  timeouts_s:
+    qc: 3600
+    mAP: 5400
+    test: 1800
+  mAP:
+    # A converted mAP50 more than this many percent below the reference is PASS_WITH_WARNINGS.
+    # It never turns a stage into FAIL; the regression only reports numbers.
+    warn_if_pct_delta_below: -10.0
+  # Log substrings that downgrade an otherwise passing stage to PASS_WITH_WARNINGS.
+  warning_patterns:
+    - "Falling back to CPUExecutionProvider"
+    - "QNNExecutionProvider is not available"
+
+# File extension of the qc artifact per runtime.
+artifact_ext:
+  litert: .tflite
+  onnx: .onnx
+  qairt: .bin
+
+# How qc builds the model per runtime. qai_hub needs a valid QAI Hub login;
+# offline_qairt uses vendor/qairt (the wrapper still mounts ~/.qai_hub for every qc run).
+qc_backend:
+  litert: qai_hub
+  onnx: qai_hub
+  qairt: offline_qairt
+
+pipelines:
+  # --- yolov10 ---
+  - {num: 1, id: yolov10-litert-int8, type: yolov10, runtime: litert, precision: int8, needs_calibration: true}
+  - {num: 2, id: yolov10-litert-fp32, type: yolov10, runtime: litert, precision: fp32, needs_calibration: false}
+  - {num: 3, id: yolov10-onnx-fp32, type: yolov10, runtime: onnx, precision: fp32, needs_calibration: false}
+  - {num: 4, id: yolov10-onnx-w8a16, type: yolov10, runtime: onnx, precision: w8a16, needs_calibration: true}
+  - {num: 5, id: yolov10-qairt-int8, type: yolov10, runtime: qairt, precision: int8, needs_calibration: true}
+  - {num: 6, id: yolov10-qairt-w8a16, type: yolov10, runtime: qairt, precision: w8a16, needs_calibration: true}
+  - {num: 7, id: yolov10-qairt-fp16, type: yolov10, runtime: qairt, precision: fp16, needs_calibration: false}
+  # --- yolov11 ---
+  - {num: 8, id: yolov11-litert-int8, type: yolov11, runtime: litert, precision: int8, needs_calibration: true}
+  - {num: 9, id: yolov11-litert-fp32, type: yolov11, runtime: litert, precision: fp32, needs_calibration: false}
+  - {num: 10, id: yolov11-onnx-fp32, type: yolov11, runtime: onnx, precision: fp32, needs_calibration: false}
+  - {num: 11, id: yolov11-onnx-w8a16, type: yolov11, runtime: onnx, precision: w8a16, needs_calibration: true}
+  - {num: 12, id: yolov11-qairt-int8, type: yolov11, runtime: qairt, precision: int8, needs_calibration: true}
+  - {num: 13, id: yolov11-qairt-w8a16, type: yolov11, runtime: qairt, precision: w8a16, needs_calibration: true}
+  - {num: 14, id: yolov11-qairt-fp16, type: yolov11, runtime: qairt, precision: fp16, needs_calibration: false}
+  # --- yolov26 ---
+  - {num: 15, id: yolov26-litert-int8, type: yolov26, runtime: litert, precision: int8, needs_calibration: true}
+  - {num: 16, id: yolov26-litert-fp32, type: yolov26, runtime: litert, precision: fp32, needs_calibration: false}
+  - {num: 17, id: yolov26-onnx-fp32, type: yolov26, runtime: onnx, precision: fp32, needs_calibration: false}
+  - {num: 18, id: yolov26-onnx-w8a16, type: yolov26, runtime: onnx, precision: w8a16, needs_calibration: true}
+  - {num: 19, id: yolov26-qairt-int8, type: yolov26, runtime: qairt, precision: int8, needs_calibration: true}
+  - {num: 20, id: yolov26-qairt-w8a16, type: yolov26, runtime: qairt, precision: w8a16, needs_calibration: true}
+  - {num: 21, id: yolov26-qairt-fp16, type: yolov26, runtime: qairt, precision: fp16, needs_calibration: false}
