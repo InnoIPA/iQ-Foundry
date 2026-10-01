@@ -9,6 +9,12 @@ offline with the SDK vendored under `vendor/qairt/`, so it needs no token and no
 
 ![QC mode overview](Images/qc-mode-overview.png)
 
+> [!TIP]
+> **🤖 Using a coding agent?** If you use Claude Code, Codex or any other coding agent, you can run
+> `qc` by chatting with the agent through the `iqf-assistant` skill. Type `/iqf-assistant` or just
+> ask, for example *"convert my model for the board"*. See [iQ-Foundry
+> Assistant](iqf_assistant.md).
+
 > [!IMPORTANT]
 > Recommended host flow: run `./docker/iqf run qc ...`. If you repeat this workflow, save the
 > required host paths first with

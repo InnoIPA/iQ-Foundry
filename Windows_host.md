@@ -112,6 +112,13 @@ After these steps, the Windows host is ready for `qc`, `mAP`, and host-side `tes
 
 ## Quick Start
 
+> [!TIP]
+> **🤖 Using a coding agent?** If you use Claude Code, Codex or any other coding agent, you can run
+> iQ-Foundry by chatting with the agent through the `iqf-assistant` skill. It checks your setup
+> and runs `qc`, `mAP` and `test` for you. Start the agent inside the WSL Ubuntu terminal, then
+> type `/iqf-assistant` or just ask, for example *"convert my model for the board"*. See
+> [iQ-Foundry Assistant](docs/iqf_assistant.md).
+
 `iQ-Foundry` supports two ways to run each mode:
 
 - [Configure Flow](#configure-flow): simple, repeatable wrapper commands for each mode. Save the required host paths in `.iqf/docker-paths.json`, then run the mode with shorter commands. For a guided walkthrough of the repeated-flow experience, see the [iQ-Studio YOLO26 tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).

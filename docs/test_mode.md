@@ -7,6 +7,12 @@ expectations.
 
 ![Test mode overview](Images/test-mode-overview.png)
 
+> [!TIP]
+> **🤖 Using a coding agent?** If you use Claude Code, Codex or any other coding agent, you can run
+> `test` by chatting with the agent through the `iqf-assistant` skill. Type `/iqf-assistant` or
+> just ask, for example *"try my converted model on these pictures"*. See [iQ-Foundry
+> Assistant](iqf_assistant.md).
+
 > [!IMPORTANT]
 > Recommended host flow: run `./docker/iqf run test ... --adb` from your Ubuntu host or WSL
 > terminal. If you repeat this workflow, save the required host paths first with

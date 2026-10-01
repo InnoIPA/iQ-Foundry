@@ -7,6 +7,12 @@ deployment.
 
 ![mAP mode overview](Images/map-mode-overview.png)
 
+> [!TIP]
+> **🤖 Using a coding agent?** If you use Claude Code, Codex or any other coding agent, you can run
+> `mAP` by chatting with the agent through the `iqf-assistant` skill. It also reformats labels
+> that are not in a supported format, into a copy. Type `/iqf-assistant` or just ask, for example
+> *"check the accuracy of my converted model"*. See [iQ-Foundry Assistant](iqf_assistant.md).
+
 > [!IMPORTANT]
 > Recommended host flow: run `./docker/iqf run mAP ...`. If you repeat this workflow, save the
 > required host paths first with
