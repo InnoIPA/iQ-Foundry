@@ -951,14 +951,21 @@ def plan_run_command(
     needs_adb = mode == "mAP" or (mode == "test" and use_adb)
     if mode == "qc":
         qai_hub_ini = Path.home() / ".qai_hub" / "client.ini"
-        _runtime_check(qai_hub_ini, "QAI Hub config", dry_run, warnings, expected_kind="file")
-        mounts.append(MountSpec(str(qai_hub_ini.parent), "/root/.qai_hub", True))
+        # qairt converts offline with the vendored SDK and never calls AI Hub.
+        if runtime != "qairt":
+            _runtime_check(
+                qai_hub_ini, "QAI Hub config", dry_run, warnings, expected_kind="file"
+            )
+        if runtime != "qairt" or qai_hub_ini.parent.is_dir():
+            mounts.append(MountSpec(str(qai_hub_ini.parent), "/root/.qai_hub", True))
 
+    host_pre_command = None
     if needs_adb:
         _append_adb_runtime_mounts(mounts, dry_run, warnings)
-        host_pre_command = None
-    else:
-        host_pre_command = None
+        # The container's adb server cannot claim the USB device while a host-side
+        # server holds it, and the in-container kill-server cannot reach the host's.
+        if shutil.which("adb"):
+            host_pre_command = ["sh", "-c", "adb kill-server >/dev/null 2>&1 || true"]
 
     inner_command = build_inner_cli_command(
         mode=mode,

@@ -269,17 +269,22 @@ def _wrapper_help_style_enabled() -> bool:
     return os.environ.get("IQF_HELP_COMMAND_STYLE") == "wrapper"
 
 
+def _choices(values: tuple[str, ...]) -> str:
+    return "{" + ",".join(values) + "}"
+
+
 def _help_usage_command() -> str:
     if _wrapper_help_style_enabled():
         return (
-            "./docker/iqf run {qc,mAP,test} --type {yolov10,yolov11,yolov26} "
-            "--runtime {litert,onnx} --precision {fp32,int8,w8a16} "
+            f"./docker/iqf run {{qc,mAP,test}} --type {_choices(MODEL_TYPES)} "
+            f"--runtime {_choices(RUNTIME_CHOICES)} "
+            f"--precision {_choices(PRECISION_CHOICES)} "
             "[known path flags] [backend options]"
         )
     return (
-        "python3 cli.py --type {yolov10,yolov11,yolov26} "
-        "--mode {qc,mAP,test} --runtime {litert,onnx} "
-        "--precision {fp32,int8,w8a16} [options]"
+        f"python3 cli.py --type {_choices(MODEL_TYPES)} "
+        f"--mode {{qc,mAP,test}} --runtime {_choices(RUNTIME_CHOICES)} "
+        f"--precision {_choices(PRECISION_CHOICES)} [options]"
     )
 
 
@@ -295,7 +300,7 @@ def _help_qc_command(runtime: str = "litert", precision: str = "int8") -> str:
 
 
 def _help_map_command(runtime: str = "onnx", precision: str = "fp32") -> str:
-    converted_model = "compiled.tflite" if runtime == "litert" else "compiled.onnx"
+    converted_model = f"compiled{QC_OUTPUT_SUFFIXES[runtime]}"
     if _wrapper_help_style_enabled():
         return (
             "./docker/iqf run mAP --type yolov26 --images val/ "
@@ -316,7 +321,7 @@ def _help_test_image_command(
     precision: str = "fp32",
     adb: bool = False,
 ) -> str:
-    model_name = "model.tflite" if runtime == "litert" else "model.onnx"
+    model_name = f"model{QC_OUTPUT_SUFFIXES[runtime]}"
     if _wrapper_help_style_enabled():
         command = (
             f"./docker/iqf run test --type yolov26 --model {model_name} "
@@ -339,7 +344,7 @@ def _help_test_images_command(
     precision: str = "fp32",
     adb: bool = False,
 ) -> str:
-    model_name = "model.tflite" if runtime == "litert" else "model.onnx"
+    model_name = f"model{QC_OUTPUT_SUFFIXES[runtime]}"
     if _wrapper_help_style_enabled():
         command = (
             f"./docker/iqf run test --type yolov26 --model {model_name} "
@@ -359,54 +364,79 @@ def _help_test_images_command(
 
 def _help_supported_matrix_lines() -> list[str]:
     return [
-        "  litert + int8   Existing LiteRT/TFLite INT8 path",
-        "  litert + fp32   LiteRT/TFLite FP32 path",
-        "  onnx   + fp32   ONNX Runtime FP32 path",
-        "  onnx   + w8a16  ONNX Runtime W8A16 path",
+        f"  {runtime.ljust(6)} + {precision.ljust(6)} {description}"
+        for runtime, precision, description in SUPPORTED_RUNTIME_PRECISION_ROWS
     ]
+
+
+def _help_combinations(needs_calibration: bool) -> str:
+    return ", ".join(
+        f"{runtime}/{precision}"
+        for runtime, precision, _ in SUPPORTED_RUNTIME_PRECISION_ROWS
+        if qc_requires_calibration(runtime, precision) == needs_calibration
+    )
+
+
+def _help_runtime_note() -> str:
+    return f"Choices: {', '.join(RUNTIME_CHOICES)}; required"
+
+
+def _help_precision_note() -> str:
+    return f"Choices: {', '.join(PRECISION_CHOICES)}; required"
+
+
+def _help_converted_model_note() -> str:
+    return (
+        "Required; .tflite (litert), .onnx or .onnx.zip (onnx), "
+        "or .bin context binary (qairt)"
+    )
 
 
 def _help_qc_calibration_note() -> str:
     return (
-        "Required for litert/int8 and onnx/w8a16; ignored for "
-        "litert/fp32 and onnx/fp32"
+        f"Required for {_help_combinations(True)}; "
+        f"ignored for {_help_combinations(False)}"
     )
 
 
 def _help_qc_quant_scheme_note() -> str:
     return (
         "Choices: mse, minmax; defaults: yolov10=mse, yolov11=minmax, "
-        "yolov26=mse; ignored for litert/fp32 and onnx/fp32"
+        "yolov26=mse; qairt passes minmax to qairt-quantizer as min-max; "
+        f"ignored for {_help_combinations(False)}"
     )
 
 
 def _help_remote_runner_local_note() -> str:
     return (
         "LiteRT default: tool/remote_tflite_raw_runner.py; "
-        "ONNX effective default: tool/onnx_inference.py"
+        "ONNX effective default: tool/onnx_inference.py; "
+        "not used by QAIRT"
     )
 
 
 def _help_remote_runner_remote_note() -> str:
     return (
         "LiteRT default: /data/local/tmp/yolo_map_eval/remote_tflite_raw_runner.py; "
-        "ONNX effective default: /data/local/tmp/yolo_map_eval/onnx_inference.py"
+        "ONNX effective default: /data/local/tmp/yolo_map_eval/onnx_inference.py; "
+        "not used by QAIRT"
     )
 
 
 def _help_qnn_lib_note() -> str:
     return (
         "LiteRT default: /usr/lib/libQnnTFLiteDelegate.so; "
-        "ONNX uses ORT QNN backend_path and remaps the LiteRT default to libQnnHtp.so"
+        "ONNX (ORT QNN backend_path) and QAIRT (qnn-net-run --backend) "
+        "remap the LiteRT default to libQnnHtp.so"
     )
 
 
 def _help_backend_note() -> str:
-    return "Default: htp for LiteRT delegate flows; ignored by ONNX Runtime"
+    return "Default: htp for LiteRT delegate flows; ignored by ONNX Runtime and QAIRT"
 
 
 def _help_disable_int8_prefilter_note() -> str:
-    return "Default: off; LiteRT INT8-specific and ignored by ONNX Runtime"
+    return "Default: off; LiteRT INT8-specific and ignored by ONNX Runtime and QAIRT"
 
 
 def _help_mode_details_command(mode_name: str) -> str:
@@ -519,6 +549,10 @@ def render_main_help() -> None:
                 "Run ONNX Runtime W8A16 qc with calibration data",
             ),
             (
+                _help_qc_command("qairt", "fp16"),
+                "Run QAIRT FP16 qc offline without calibration data",
+            ),
+            (
                 _help_test_image_command("onnx", "fp32", adb=True),
                 "Run ONNX Runtime FP32 test on one image through adb",
             ),
@@ -554,19 +588,15 @@ def render_qc_help() -> None:
     print_help_lines(
         [
             "  Use qc mode to convert a source model into a compiled model. "
-            "Calibration is required only for litert/int8 and onnx/w8a16."
+            f"Calibration is required only for {_help_combinations(True)}."
         ]
     )
 
     print_help_section("Required Arguments", ANSI_GREEN)
     qc_rows = [
         ("--type TYPE", "Model family", "Required"),
-        ("--runtime RUNTIME", "Runtime", "Choices: litert, onnx; required"),
-        (
-            "--precision PRECISION",
-            "Precision",
-            "Choices: fp32, int8, w8a16; required",
-        ),
+        ("--runtime RUNTIME", "Runtime", _help_runtime_note()),
+        ("--precision PRECISION", "Precision", _help_precision_note()),
         ("--model MODEL", "Source model path", "Required"),
         (
             "--calib_dir DIR",
@@ -613,6 +643,9 @@ def render_qc_help() -> None:
             f"  {_help_qc_command('litert', 'fp32')}",
             f"  {_help_qc_command('onnx', 'fp32')}",
             f"  {_help_qc_command('onnx', 'w8a16')}",
+            f"  {_help_qc_command('qairt', 'int8')}",
+            f"  {_help_qc_command('qairt', 'w8a16')}",
+            f"  {_help_qc_command('qairt', 'fp16')}",
         ]
     )
 
@@ -622,6 +655,8 @@ def render_qc_help() -> None:
             "  - yolov11 uses the default head and ignores --qc-head.",
             "  - Default quantization scheme: yolov10=mse, yolov11=minmax, "
             "yolov26=mse.",
+            "  - qairt converts offline with the vendored QAIRT SDK and writes a "
+            ".bin HTP context binary; it needs no QAI Hub login.",
         ]
     )
 
@@ -643,16 +678,12 @@ def render_map_help() -> None:
     print_help_section("Required Arguments", ANSI_GREEN)
     map_rows = [
         ("--type TYPE", "Model family", "Required"),
-        ("--runtime RUNTIME", "Runtime", "Choices: litert, onnx; required"),
-        (
-            "--precision PRECISION",
-            "Precision",
-            "Choices: fp32, int8, w8a16; required",
-        ),
+        ("--runtime RUNTIME", "Runtime", _help_runtime_note()),
+        ("--precision PRECISION", "Precision", _help_precision_note()),
         ("--annotations PATH", "Annotation file or directory", "Required"),
         ("--images DIR", "Image directory", "Required"),
         ("--reference-model PATH", "Reference model path", "Required"),
-        ("--converted-model PATH", "Converted model path", "Required"),
+        ("--converted-model PATH", "Converted model path", _help_converted_model_note()),
     ]
     mode_row = _mode_required_argument_row("mAP")
     if mode_row:
@@ -721,6 +752,7 @@ def render_map_help() -> None:
             f"  {_help_map_command('litert', 'fp32')}",
             f"  {_help_map_command('onnx', 'fp32')}",
             f"  {_help_map_command('onnx', 'w8a16')}",
+            f"  {_help_map_command('qairt', 'int8')}",
         ]
     )
 
@@ -754,13 +786,9 @@ def render_test_help() -> None:
     print_help_section("Required Arguments", ANSI_GREEN)
     test_rows = [
         ("--type TYPE", "Model family", "Required"),
-        ("--runtime RUNTIME", "Runtime", "Choices: litert, onnx; required"),
-        (
-            "--precision PRECISION",
-            "Precision",
-            "Choices: fp32, int8, w8a16; required",
-        ),
-        ("--model MODEL", "Converted model path", "Required"),
+        ("--runtime RUNTIME", "Runtime", _help_runtime_note()),
+        ("--precision PRECISION", "Precision", _help_precision_note()),
+        ("--model MODEL", "Converted model path", _help_converted_model_note()),
         ("--yaml YAML", "Class names YAML", "Required"),
         (
             "--image IMAGE",
@@ -848,6 +876,9 @@ def render_test_help() -> None:
             "",
             "  ONNX W8A16 image directory via adb",
             f"    {_help_test_images_command('onnx', 'w8a16', adb=True)}",
+            "",
+            "  QAIRT INT8 image directory via adb",
+            f"    {_help_test_images_command('qairt', 'int8', adb=True)}",
         ]
     )
 
@@ -858,6 +889,8 @@ def render_test_help() -> None:
             "  - --output overrides the default output directory.",
             "  - adb-related flags are needed only when running through adb.",
             "  - ONNX Runtime ADB flows use tool/onnx_inference.py and ORT QNN backend-path handling.",
+            "  - QAIRT runs the target's own qnn-net-run on the .bin context binary; "
+            "no device venv is installed.",
             "  - Current defaults: conf=0.25, nms=0.6, topk=300, "
             "max-det=100, postprocess-flow=auto.",
         ]
@@ -955,8 +988,9 @@ def parse_args():
         "iQ-Foundry",
         add_help=False,
         usage=(
-            "cli.py --type {yolov10,yolov11,yolov26} --mode {qc,mAP,test} "
-            "--runtime {litert,onnx} --precision {fp32,int8,w8a16} [options]"
+            f"cli.py --type {_choices(MODEL_TYPES)} --mode {{qc,mAP,test}} "
+            f"--runtime {_choices(RUNTIME_CHOICES)} "
+            f"--precision {_choices(PRECISION_CHOICES)} [options]"
         ),
     )
 

@@ -88,6 +88,20 @@ For a smaller validation run, limit the number of images:
   --max-images 5
 ```
 
+QAIRT INT8:
+
+```bash
+./docker/iqf run mAP \
+  --type yolov26 \
+  --runtime qairt \
+  --precision int8 \
+  --annotations /path/to/instances_val2017.json \
+  --images /path/to/val2017 \
+  --reference-model /path/to/yolov26n.pt \
+  --converted-model /path/to/yolov26_qairt_int8.bin \
+  --max-images 5
+```
+
 ## Purpose
 
 `mAP` mode is used to answer one question: how much model quality changed after the converted
@@ -106,8 +120,9 @@ In the current implementation:
 
 - the wrapper subcommand `./docker/iqf run mAP`
 - `--type` with one of `yolov10`, `yolov11`, or `yolov26`
-- `--runtime` with one of `litert` or `onnx`
-- `--precision` with one of `fp32`, `int8`, or `w8a16`
+- `--runtime` with one of `litert`, `onnx`, or `qairt`
+- `--precision` with one of `fp32`, `int8`, `w8a16`, or `fp16`, in a supported combination (see
+  the table above)
 - `--annotations` pointing to either a COCO annotations JSON file or a custom annotation directory
 - `--images` pointing to the matching image directory
 - `--reference-model` pointing to the reference `.pt` model
@@ -137,7 +152,9 @@ The current `mAP` pipeline works as follows:
 2. Resolve the annotation source. COCO JSON is used directly; custom `.txt` or `.xml` labels are normalized into a temporary COCO JSON first.
 3. Build category mapping from reference model class names to COCO category ids.
 4. Resolve the reference output head and evaluation thresholds.
-5. Prepare the target runtime, remote runner, and ADB-managed Python environment.
+5. Prepare the target runtime: LiteRT and ONNX Runtime push the remote runner and provision the
+   ADB-managed Python environment; QAIRT pushes only the context binary and input tensors and runs
+   the target's own `qnn-net-run`.
 6. Run reference inference on the host and converted-model inference on EXMP-Q911 (Qualcomm QCS9075) with the same evaluation images.
 7. Postprocess both outputs with the same settings and evaluate them with `mAP@0.5`.
 8. Write a summary report with reference `mAP`, converted `mAP`, and the resulting deltas.
@@ -187,7 +204,7 @@ always uses its default head and ignores `--fp-head`.
 | `--annotations` | Path to a COCO annotations JSON file or a custom annotation directory. | Required |
 | `--images` | Path to the image directory referenced by the annotations file. | Required |
 | `--reference-model` | Path to the reference `.pt` model used as the quality baseline. | Required |
-| `--converted-model` | Path to the converted `.tflite`, `.onnx`, or compatible `.onnx.zip` model. | Required |
+| `--converted-model` | Path to the converted `.tflite`, `.onnx`, compatible `.onnx.zip`, or `.bin` (QAIRT) model. | Required |
 | `--output_text` | Path for the text report. | `out/mAP_results/<type>/<type>_mAP_result_<runtime>_<precision>_<timestamp>.txt` |
 | `--conf` | Pre-NMS confidence threshold used during postprocess for both the reference and converted model paths. | `0.25` |
 | `--fp-head` | Reference output branch override for `yolov10` and `yolov26`; use `one2one` when the converted model was created with `--qc-head one2one`. `yolov11` always uses `default`. | `one2many` for `yolov10` and `yolov26`, `default` for `yolov11` |
@@ -196,8 +213,8 @@ always uses its default head and ignores `--fp-head`.
 | `--max-images` | Number of images to evaluate across the entire run. | `300` |
 | `--adb-serial` | ADB device serial for the target device. | first available device |
 | `--remote-workdir` | Remote working directory on the target. | `/data/local/tmp/yolo_map_eval` |
-| `--remote-runner-local` | Local path to the remote runner script. | LiteRT default: `tool/remote_tflite_raw_runner.py`; ONNX effective default: `tool/onnx_inference.py` |
-| `--remote-runner-remote` | Target path where the remote runner is pushed. | LiteRT default: `/data/local/tmp/yolo_map_eval/remote_tflite_raw_runner.py`; ONNX effective default: `/data/local/tmp/yolo_map_eval/onnx_inference.py` |
+| `--remote-runner-local` | Local path to the remote runner script. | LiteRT default: `tool/remote_tflite_raw_runner.py`; ONNX effective default: `tool/onnx_inference.py`; not used by QAIRT |
+| `--remote-runner-remote` | Target path where the remote runner is pushed. | LiteRT default: `/data/local/tmp/yolo_map_eval/remote_tflite_raw_runner.py`; ONNX effective default: `/data/local/tmp/yolo_map_eval/onnx_inference.py`; not used by QAIRT |
 | `--qnn-lib` | LiteRT delegate library path, ONNX Runtime QNN backend path, or QAIRT backend library. | LiteRT: `/usr/lib/libQnnTFLiteDelegate.so`; ONNX and QAIRT effective default: `libQnnHtp.so` |
 | `--backend` | Delegate backend. Ignored by ONNX Runtime and QAIRT paths. | `htp` |
 | `--no-qnn` | Disable the LiteRT QNN delegate or ONNX Runtime QNN EP and use the CPU path instead. Rejected by QAIRT. | off |

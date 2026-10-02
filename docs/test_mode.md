@@ -1,6 +1,6 @@
 # Test Mode
 
-`test` mode runs a converted LiteRT or ONNX model on sample images and writes visual plus text
+`test` mode runs a converted LiteRT, ONNX or QAIRT model on sample images and writes visual plus text
 outputs for quick inspection. Use this mode after model conversion and quality validation to
 confirm that detections look correct on real input images and that on-device behavior matches
 expectations.
@@ -93,6 +93,19 @@ ONNX Runtime W8A16 over ADB:
   --runtime onnx \
   --precision w8a16 \
   --model /path/to/yolov26_onnx_w8a16.onnx \
+  --yaml /path/to/coco.yaml \
+  --images /path/to/test_images \
+  --adb
+```
+
+QAIRT INT8 over ADB:
+
+```bash
+./docker/iqf run test \
+  --type yolov26 \
+  --runtime qairt \
+  --precision int8 \
+  --model /path/to/yolov26_qairt_int8.bin \
   --yaml /path/to/coco.yaml \
   --images /path/to/test_images \
   --adb
@@ -196,11 +209,13 @@ In direct on-device mode:
 
 - the wrapper subcommand `./docker/iqf run test`
 - `--type` with one of `yolov10`, `yolov11`, or `yolov26`
-- `--runtime` with one of `litert` or `onnx`
-- `--precision` with one of `fp32`, `int8`, or `w8a16`
+- `--runtime` with one of `litert`, `onnx`, or `qairt`
+- `--precision` with one of `fp32`, `int8`, `w8a16`, or `fp16`, in a supported combination:
+  `litert` + `int8`/`fp32`, `onnx` + `fp32`/`w8a16`, `qairt` + `int8`/`w8a16`/`fp16`
 - `--model` pointing to the converted model:
   - LiteRT: `.tflite`
   - ONNX Runtime: `.onnx` or compatible `.onnx.zip`
+  - QAIRT: `.bin` HTP context binary
 - `--yaml` pointing to the class-name YAML file
 - exactly one of:
   - `--images`
@@ -242,7 +257,7 @@ These defaults are shared across LiteRT, ONNX Runtime, and QAIRT paths.
 | `--type` | Select the model family. | `yolov10`, `yolov11`, `yolov26` | Required |
 | `--runtime` | Select the deployment runtime. | `litert`, `onnx`, `qairt` | Required |
 | `--precision` | Select the deployment precision. | `fp32`, `int8`, `w8a16`, `fp16` | Required |
-| `--model` | Path to the converted model. | `.tflite`, `.onnx`, `.onnx.zip` | Required |
+| `--model` | Path to the converted model. | `.tflite`, `.onnx`, `.onnx.zip`, `.bin` | Required |
 | `--yaml` | Path to the class-name YAML file. | filesystem path | Required |
 | `--images` | Directory of input images. | filesystem path | Required unless `--image` is used |
 | `--image` | Single input image. | filesystem path | Required unless `--images` is used |
@@ -256,7 +271,7 @@ These defaults are shared across LiteRT, ONNX Runtime, and QAIRT paths.
 | `--o2o-nms` | Enable class-wise NMS when using `o2o`. | enabled or omitted | off |
 | `--disable-int8-prefilter` | Disable the INT8 class prefilter in postprocess. Meaningful only for LiteRT INT8; ignored by LiteRT FP32, ONNX Runtime, and QAIRT. | enabled or omitted | off |
 | `--adb-serial` | Select a specific ADB target device. | ADB serial string | first available ADB target |
-| `--remote-workdir` | Remote working directory used in ADB mode. | filesystem path on target | `/data/local/tmp/yolo_test` |
+| `--remote-workdir` | Remote working directory used in ADB mode. | filesystem path on target | `/data/local/tmp/yolo_map_eval` |
 | `--qnn-lib` | LiteRT delegate library path, ONNX Runtime QNN backend path, or QAIRT backend library. | filesystem path on target or backend library name | LiteRT: `/usr/lib/libQnnTFLiteDelegate.so`; ONNX and QAIRT effective default: `libQnnHtp.so` |
 | `--backend` | Delegate backend. Ignored by ONNX Runtime and QAIRT paths. | string | `htp` |
 | `--no-qnn` | Disable the LiteRT QNN delegate or ONNX Runtime QNN EP and use the CPU path instead. Rejected by QAIRT: a context binary is pre-compiled for the HTP and has no CPU fallback. | enabled or omitted | off |

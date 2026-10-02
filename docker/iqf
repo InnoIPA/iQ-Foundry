@@ -136,7 +136,11 @@ def print_global_help() -> None:
     )
     print(
         "  ./docker/iqf run test --type yolov26 --runtime onnx --precision fp32 "
-        "--model /data/model.onnx --yaml /data/coco.yaml --image /data/test.jpg"
+        "--model /data/model.onnx --yaml /data/coco.yaml --image /data/test.jpg --adb"
+    )
+    print(
+        "  ./docker/iqf run qc --type yolov26 --runtime qairt --precision fp16 "
+        "--model /data/model.pt"
     )
 
 
@@ -284,6 +288,9 @@ def _validate_runtime_precision(runtime: str, precision: str) -> None:
 def execute_plan(plan, dry_run: bool) -> int:
     print_warnings(plan.warnings)
     if dry_run:
+        if plan.host_pre_command:
+            print("Host pre-command:")
+            print(f"  {format_command(plan.host_pre_command)}")
         if plan.inner_command:
             print("Inner command:")
             print(f"  {format_command(plan.inner_command)}")
