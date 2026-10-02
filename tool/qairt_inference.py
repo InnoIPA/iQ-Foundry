@@ -335,10 +335,8 @@ class QAIRTRawModel:
         qnn_lib: str = DEFAULT_QAIRT_BACKEND,
         backend: str = "htp",
         no_qnn: bool = False,
-        box_quant: QuantParams | None = None,
-        class_quant: QuantParams | None = None,
     ):
-        _ = backend, box_quant, class_quant  # read from the context binary instead
+        _ = backend  # a context binary is HTP-only; quant params come from it
         if no_qnn:
             raise RuntimeError(
                 "--no-qnn is not supported by the QAIRT runtime: a context binary "
@@ -414,10 +412,8 @@ class ADBQAIRTRawModel:
         no_qnn: bool = False,
         shared_remote_input_dir: str | None = None,
         shared_meta: dict | None = None,
-        box_quant: QuantParams | None = None,
-        class_quant: QuantParams | None = None,
     ):
-        _ = backend, box_quant, class_quant
+        _ = backend
         if no_qnn:
             raise RuntimeError(
                 "--no-qnn is not supported by the QAIRT runtime: a context binary "
@@ -622,11 +618,10 @@ def run_qairt_test_inference_local(
 class _AdbBatchTestRunner:
     """Adapts the adb batch runner to the per-image loop used by test mode."""
 
-    def __init__(self, inner: ADBQAIRTRawModel, results: dict, order: list):
+    def __init__(self, inner: ADBQAIRTRawModel, results: dict):
         self.meta = inner.meta
         self._inner = inner
         self._results = results
-        self._order = order
         self.last_invoke_time_s = inner.last_invoke_time_s
         self.device_time_included = False
 
@@ -677,8 +672,6 @@ def run_qairt_test_inference_adb(
 
     resolved_dir, tmp_obj = _prepare_image_input(image_dir, image_path)
     image_files = collect_image_files(resolved_dir)
-    if not image_files:
-        raise RuntimeError(f"No images found in {resolved_dir}")
 
     runner = ADBQAIRTRawModel(
         model_path=model_path,
@@ -751,7 +744,7 @@ def run_qairt_test_inference_adb(
                 results[str(image_file)] = (boxes, scores, ratio, pad_w, pad_h, orig)
 
             _run_test_directory(
-                runner=_AdbBatchTestRunner(runner, results, image_files),
+                runner=_AdbBatchTestRunner(runner, results),
                 yaml_path=yaml_path,
                 image_dir=resolved_dir,
                 output_dir=output_dir,

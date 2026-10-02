@@ -72,7 +72,6 @@ TEMPLATE_FILE = (
 DEFAULT_RUNS_DIR = Path("out") / "regression"
 TOKEN_ENV = "IQF_QAI_HUB_TOKEN"
 MODES = ("qc", "mAP", "test")
-ADB_MODES = ("mAP", "test")
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 EXIT_OK = 0
@@ -2393,7 +2392,7 @@ def cmd_start(args) -> int:
         raise RegressionError(
             "refusing to start: pass --confirmed-by-user only after the user typed `run`"
         )
-    config, _, inputs = _load_context(args)
+    _, _, inputs = _load_context(args)
     run_dir = _resolve_run_dir(inputs)
     _refuse_reuse(run_dir)
     argv = [

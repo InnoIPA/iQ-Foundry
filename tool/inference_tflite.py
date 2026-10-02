@@ -820,69 +820,6 @@ class EndToEndInference:
             print(f"avg_model_invoke_ms={avg_invoke_ms:.3f}")
 
 
-def run_script(
-    script_name: str,
-    default_flow: str,
-    default_conf_thres: float,
-    default_iou_thres: float,
-    default_topk: int,
-    default_max_det: int,
-) -> None:
-    parser = argparse.ArgumentParser(prog=script_name)
-    parser.add_argument("--model", required=True, help="Path to TFLite model")
-    parser.add_argument(
-        "--yaml",
-        default="/root/workspace/sanoop/coco.yaml",
-        help="YAML with class names",
-    )
-    parser.add_argument("--img-dir", default="./image")
-    parser.add_argument("--output-dir", default="./output")
-
-    parser.add_argument("--conf-thres", type=float, default=default_conf_thres)
-    parser.add_argument("--iou-thres", type=float, default=default_iou_thres)
-    parser.add_argument("--topk", type=int, default=default_topk)
-    parser.add_argument("--max-det", type=int, default=default_max_det)
-
-    parser.add_argument(
-        "--postprocess-flow", choices=["auto", "default", "o2o", "o2m"], default="auto"
-    )
-    parser.add_argument(
-        "--o2o-nms", action="store_true", help="If flow is o2o, enable class-wise NMS"
-    )
-    parser.add_argument(
-        "--disable-int8-prefilter",
-        action="store_true",
-        help=(
-            "Disable int8 class prefilter and use the baseline "
-            "full dequant+sigmoid class path."
-        ),
-    )
-
-    parser.add_argument("--no-qnn", action="store_true")
-    parser.add_argument("--qnn-lib", default="/usr/lib/libQnnTFLiteDelegate.so")
-    parser.add_argument("--backend", default="htp")
-
-    args = parser.parse_args()
-    run_inference(
-        model_path=args.model,
-        yaml_path=args.yaml,
-        img_dir=args.img_dir,
-        output_dir=args.output_dir,
-        model_type=None,
-        default_flow=default_flow,
-        conf_thres=args.conf_thres,
-        iou_thres=args.iou_thres,
-        topk=args.topk,
-        max_det=args.max_det,
-        postprocess_flow=args.postprocess_flow,
-        o2o_nms=args.o2o_nms,
-        disable_int8_prefilter=args.disable_int8_prefilter,
-        no_qnn=args.no_qnn,
-        qnn_lib=args.qnn_lib,
-        backend=args.backend,
-    )
-
-
 def collect_image_files(img_dir: str) -> list[Path]:
     image_dir = Path(img_dir)
     if not image_dir.is_dir():

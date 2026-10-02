@@ -1868,6 +1868,3 @@ def run_pair_map_eval(
         "output_text": str(output_path),
     }
 
-
-def run_fp_int_pair_map_eval(*args, **kwargs):
-    return run_pair_map_eval(*args, **kwargs)

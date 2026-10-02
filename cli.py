@@ -67,9 +67,7 @@ WRAPPER_RUNTIME_PRECISION_EXAMPLE = (
 )
 
 MODE_REQUIRED_FIELDS = {
-    "qc": ("model", "calib_dir"),
     "mAP": ("annotations", "reference_model", "images", "converted_model"),
-    "test": ("model", "yaml", "images"),
 }
 
 MODE_REQUIRED_FLAGS = {
@@ -139,14 +137,6 @@ def show_notice(message: str, hold_seconds: float = NOTICE_HOLD_SECONDS) -> None
 
 def color_text(text: str, color: str) -> str:
     return f"{color}{text}{ANSI_RESET}"
-
-
-def print_error(message: str) -> None:
-    print(color_text(message, ANSI_RED))
-
-
-def print_success(message: str) -> None:
-    print(color_text(message, ANSI_GREEN))
 
 
 def print_info(message: str) -> None:
@@ -240,14 +230,6 @@ def print_help_command_pairs(
         print(color_text(f"  {command}", command_color))
         print(color_text(f"    {description}", description_color))
         print()
-
-
-def print_help_example_block(lines: list[str], border_color: str = ANSI_CYAN) -> None:
-    print_boxed_summary(
-        lines,
-        color=border_color,
-        white_line_indices=set(range(len(lines))),
-    )
 
 
 def print_help_args(
@@ -469,15 +451,6 @@ def _contains_option(argv: list[str], option: str) -> bool:
 
 def _help_requested(argv: list[str]) -> bool:
     return any(arg in {"-h", "--help"} for arg in argv)
-
-
-def _has_bare_option(argv: list[str], option: str) -> bool:
-    for idx, arg in enumerate(argv):
-        if arg != option:
-            continue
-        if idx + 1 >= len(argv) or argv[idx + 1].startswith("--"):
-            return True
-    return False
 
 
 def _has_option_value(argv: list[str], option: str) -> bool:
@@ -1177,10 +1150,6 @@ def build_supported_runtime_precision_matrix() -> str:
     return "\n".join(lines)
 
 
-def print_supported_runtime_precision_matrix() -> None:
-    print(build_supported_runtime_precision_matrix())
-
-
 def _runtime_precision_required_message() -> str:
     return (
         f"{color_text('[error] v1.0.0 requires both --runtime and --precision.', ANSI_RED)}\n"
@@ -1245,10 +1214,6 @@ def resolve_default_fp_head(model_type: str, fp_head_override: str | None) -> st
 
     if fp_head_override is not None:
         return fp_head_override
-    if model_type == "yolov10":
-        return "one2many"
-    if model_type == "yolov26":
-        return "one2many"
     return "one2many"
 
 
@@ -1263,11 +1228,6 @@ def resolve_default_qc_head(model_type: str, qc_head_override: str | None) -> st
 
     if qc_head_override is not None:
         return qc_head_override
-
-    if model_type == "yolov10":
-        return "one2many"
-    if model_type == "yolov26":
-        return "one2many"
     return "one2many"
 
 
