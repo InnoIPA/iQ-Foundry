@@ -13,29 +13,14 @@
 # limitations under the License.
 from __future__ import annotations
 
-import inspect
-import json
 import os
 from pathlib import Path
-import shutil
-import subprocess
 import tempfile
-import zipfile
-
-try:
-    import numpy as np
-except Exception:
-    np = None
 
 try:
     import torch
 except Exception:
     torch = None
-
-try:
-    from PIL import Image
-except Exception:
-    Image = None
 
 try:
     from ultralytics import YOLO
@@ -47,6 +32,17 @@ try:
 except Exception:
     hub = None
 
+from yolo_models.common import (
+    QAIRT_CALIBRATION_METHODS,
+    build_qairt_context_binary,
+    export_traced_model_to_onnx,
+    finalize_downloaded_onnx_artifact,
+    load_calibration_images,
+    require_qc_deps,
+    run_qairt_tool,
+    write_qairt_calibration_inputs,
+)
+
 
 YOLOV26_TEST_DEFAULTS = {
     "default_flow": "o2m",
@@ -57,23 +53,8 @@ YOLOV26_TEST_DEFAULTS = {
 }
 
 
-def _require_qc_deps() -> None:
-    missing = []
-    if np is None:
-        missing.append("numpy")
-    if torch is None:
-        missing.append("torch")
-    if Image is None:
-        missing.append("Pillow")
-    if YOLO is None:
-        missing.append("ultralytics")
-    if hub is None:
-        missing.append("qai_hub")
-    if missing:
-        raise RuntimeError(
-            "Missing QC dependencies for yolov26 quantize_convert: "
-            + ", ".join(missing)
-        )
+def _require_qc_deps(need_hub: bool = True) -> None:
+    require_qc_deps("yolov26", need_hub=need_hub)
 
 
 _TORCH_BASE = torch.nn.Module if torch is not None else object
@@ -213,228 +194,8 @@ class Yolo26RawBranch8400Wrapper(_TORCH_BASE):
 
 
 # ----------------------------
-# Calibration loader (same style as yolov10)
-# ----------------------------
-def load_calibration_images(
-    images_dir: str, input_hw: int, max_images: int = 200
-) -> list[np.ndarray]:
-    """
-    Loads up to max_images from images_dir and returns NHWC float32 arrays in [0,1]:
-      each element: [1,H,W,3]
-    """
-    _require_qc_deps()
-    if not os.path.isdir(images_dir):
-        raise RuntimeError(f"Calibration dir not found: {images_dir}")
-    assert np is not None and Image is not None
-
-    sample_inputs: list[np.ndarray] = []
-    for name in sorted(os.listdir(images_dir)):
-        if len(sample_inputs) >= max_images:
-            break
-        p = os.path.join(images_dir, name)
-        if not os.path.isfile(p):
-            continue
-        try:
-            im = Image.open(p).convert("RGB").resize((input_hw, input_hw))
-        except Exception:
-            continue
-        arr = (np.array(im).astype(np.float32) / 255.0)[None, ...]  # [1,H,W,3]
-        sample_inputs.append(arr)
-
-    if not sample_inputs:
-        raise RuntimeError(f"No calibration images loaded from: {images_dir}")
-
-    return sample_inputs
-
-
-def _finalize_downloaded_onnx_artifact(
-    downloaded_path: str | None,
-    requested_output_path: str,
-) -> str:
-    requested = Path(requested_output_path).expanduser().resolve()
-    candidate = Path(downloaded_path).expanduser().resolve() if downloaded_path else requested
-    requested.parent.mkdir(parents=True, exist_ok=True)
-
-    if zipfile.is_zipfile(candidate):
-        with tempfile.TemporaryDirectory(prefix="yolov26_onnx_artifact_") as tmpdir:
-            tmp_root = Path(tmpdir)
-            with zipfile.ZipFile(candidate) as zf:
-                zf.extractall(tmp_root)
-
-            extracted_model = next(tmp_root.rglob("model.onnx"), None)
-            if extracted_model is None:
-                raise RuntimeError(
-                    "Downloaded ONNX bundle does not contain model.onnx"
-                )
-
-            shutil.copy2(extracted_model, requested)
-            extracted_data = extracted_model.with_name("model.data")
-            if extracted_data.is_file():
-                shutil.copy2(extracted_data, requested.with_name("model.data"))
-        return str(requested)
-
-    if candidate != requested:
-        shutil.copy2(candidate, requested)
-        candidate_data = candidate.with_name("model.data")
-        if candidate_data.is_file():
-            shutil.copy2(candidate_data, requested.with_name("model.data"))
-    return str(requested)
-
-
-# ----------------------------
 # Pipeline
 # ----------------------------
-# --- QAIRT offline conversion -------------------------------------------------
-# Builds a pre-compiled HTP context binary locally: ONNX -> DLC -> (quantize) ->
-# context binary. No Qualcomm AI Hub and no device-side compilation.
-
-QAIRT_SDK_RELATIVE_PATH = "vendor/qairt/2.47.0.260601"
-QAIRT_DSP_ARCH = "v73"  # QCS9075 / SA8775P-class HTP
-QAIRT_ONNX_OPSET = 17
-# Repo scheme names map onto qairt-quantizer's spelling; "minmax" is rejected.
-QAIRT_CALIBRATION_METHODS = {"mse": "mse", "minmax": "min-max"}
-
-
-def qairt_sdk_root() -> str:
-    root = Path(__file__).resolve().parent.parent / QAIRT_SDK_RELATIVE_PATH
-    if not (root / "bin").is_dir():
-        raise RuntimeError(
-            f"QAIRT SDK not found at {root}. "
-            "The vendored SDK ships with the repository; re-clone or restore it."
-        )
-    return str(root)
-
-
-def qairt_env() -> dict:
-    """Environment for the vendored SDK tools."""
-    sdk = qairt_sdk_root()
-    env = dict(os.environ)
-    env["QNN_SDK_ROOT"] = sdk
-    env["PATH"] = f"{sdk}/bin:" + env.get("PATH", "")
-    env["LD_LIBRARY_PATH"] = f"{sdk}/lib:" + env.get("LD_LIBRARY_PATH", "")
-    env["PYTHONPATH"] = f"{sdk}/lib/python:" + env.get("PYTHONPATH", "")
-    return env
-
-
-def run_qairt_tool(args: list[str], step: str) -> str:
-    """Run one vendored SDK tool, surfacing its tail on failure."""
-    sdk = qairt_sdk_root()
-    proc = subprocess.run(
-        [f"{sdk}/bin/{args[0]}", *args[1:]],
-        env=qairt_env(),
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-12:])
-        raise RuntimeError(f"QAIRT {step} failed:\n{tail}")
-    return proc.stdout
-
-
-def qairt_graph_name(dlc_path: str) -> str:
-    """Graph name recorded in the DLC; the HTP config must reference it exactly."""
-    out = run_qairt_tool(["qairt-dlc-info", "-i", dlc_path], "dlc-info")
-    for line in out.splitlines():
-        if line.startswith("Info of graph: "):
-            return line.split("Info of graph: ", 1)[1].strip()
-    raise RuntimeError(f"Could not read graph name from {dlc_path}")
-
-
-def write_qairt_calibration_inputs(
-    calib_dir: str, input_hw: int, max_calib: int, work_dir: str
-) -> str:
-    """Dump calibration images as float32 NHWC .raw files and list them."""
-    samples = load_calibration_images(calib_dir, input_hw, max_images=max_calib)
-    if not samples:
-        raise RuntimeError(f"No calibration images found in {calib_dir}")
-    raw_dir = os.path.join(work_dir, "calib")
-    os.makedirs(raw_dir, exist_ok=True)
-    listed = []
-    for index, sample in enumerate(samples):
-        raw_path = os.path.join(raw_dir, f"calib_{index:04d}.raw")
-        np.ascontiguousarray(sample, dtype=np.float32).tofile(raw_path)
-        listed.append(raw_path)
-    list_path = os.path.join(work_dir, "input_list.txt")
-    with open(list_path, "w") as handle:
-        handle.write("\n".join(listed) + "\n")
-    return list_path
-
-
-def export_traced_model_to_onnx(pt_model, input_shape, onnx_path: str) -> None:
-    """Export the traced wrapper to ONNX with fixed shapes and named outputs."""
-    assert torch is not None
-    dummy = torch.zeros(input_shape, dtype=torch.float32)
-    kwargs = {
-        "opset_version": QAIRT_ONNX_OPSET,
-        "input_names": ["image"],
-        "output_names": ["boxes", "scores"],
-        "dynamic_axes": None,
-        "do_constant_folding": True,
-    }
-    # torch >= 2.6 defaults to the dynamo exporter, which cannot export these heads.
-    if "dynamo" in inspect.signature(torch.onnx.export).parameters:
-        kwargs["dynamo"] = False
-    torch.onnx.export(pt_model, dummy, onnx_path, **kwargs)
-
-
-def build_qairt_context_binary(
-    dlc_path: str, output_path: str, work_dir: str, vtcm_mb: int = 8
-) -> None:
-    """Offline-prepare the DLC into an HTP context binary."""
-    sdk = qairt_sdk_root()
-    graph_name = qairt_graph_name(dlc_path)
-    graph_cfg = os.path.join(work_dir, "htp_graph.json")
-    ext_cfg = os.path.join(work_dir, "htp_ext.json")
-    with open(graph_cfg, "w") as handle:
-        json.dump(
-            {
-                "graphs": [
-                    {
-                        "graph_names": [graph_name],
-                        "vtcm_mb": vtcm_mb,
-                        "O": 3,
-                        "dlbc": 1,
-                    }
-                ],
-                "devices": [
-                    {"dsp_arch": QAIRT_DSP_ARCH, "pd_session": "unsigned"}
-                ],
-            },
-            handle,
-        )
-    with open(ext_cfg, "w") as handle:
-        json.dump(
-            {
-                "backend_extensions": {
-                    "shared_library_path": "libQnnHtpNetRunExtensions.so",
-                    "config_file_path": graph_cfg,
-                }
-            },
-            handle,
-        )
-
-    out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
-    os.makedirs(out_dir, exist_ok=True)
-    stem = Path(output_path).stem
-    run_qairt_tool(
-        [
-            "qnn-context-binary-generator",
-            "--backend", f"{sdk}/lib/libQnnHtp.so",
-            "--dlc_path", dlc_path,
-            "--binary_file", stem,
-            "--config_file", ext_cfg,
-            "--output_dir", out_dir,
-            "--log_level", "error",
-        ],
-        "context-binary-generator",
-    )
-    produced = os.path.join(out_dir, f"{stem}.bin")
-    if produced != os.path.abspath(output_path):
-        shutil.move(produced, output_path)
-    if not os.path.exists(output_path):
-        raise RuntimeError(f"QAIRT context binary was not produced at {output_path}")
-
-
 class YoloV26Pipeline:
     def convert(
         self,
@@ -495,7 +256,7 @@ class YoloV26Pipeline:
         raise ValueError(f"Unsupported runtime/precision: {runtime}/{precision}")
 
     def _build_traced_model(self, model_path: str, qc_head: str):
-        _require_qc_deps()
+        _require_qc_deps(need_hub=False)
         assert torch is not None and YOLO is not None
 
         input_hw = 640
@@ -520,7 +281,7 @@ class YoloV26Pipeline:
         qc_quant_scheme: str = "mse",
     ) -> None:
         """Build an HTP context binary: ONNX -> DLC -> (quantize) -> .bin."""
-        _require_qc_deps()
+        _require_qc_deps(need_hub=False)
         if precision not in ("int8", "w8a16", "fp16"):
             raise ValueError(f"Unsupported QAIRT precision: {precision}")
 
@@ -603,7 +364,7 @@ class YoloV26Pipeline:
             options="--target_runtime onnx",
         )
         downloaded_path = compile_job.download_target_model(str(output_path))
-        final_path = _finalize_downloaded_onnx_artifact(downloaded_path, output_path)
+        final_path = finalize_downloaded_onnx_artifact(downloaded_path, output_path)
         print(f"[yolov26] wrote onnx: {final_path}")
 
     def export_tflite_fp32(
@@ -683,7 +444,7 @@ class YoloV26Pipeline:
             options="--target_runtime onnx --quantize_io",
         )
         downloaded_path = compile_quantized_job.download_target_model(str(output_path))
-        final_path = _finalize_downloaded_onnx_artifact(downloaded_path, output_path)
+        final_path = finalize_downloaded_onnx_artifact(downloaded_path, output_path)
         print(f"[yolov26] wrote onnx: {final_path}")
 
     def quantize_convert(

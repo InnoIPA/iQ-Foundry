@@ -587,23 +587,61 @@ def _validate_class_name_count(meta: ORTModelMeta, yaml_path: str) -> None:
         )
 
 
-def _onnx_bundle_uses_external_data(model_path: Path) -> bool:
+def _iter_graph_tensors(graph):
+    """Every TensorProto in a graph, including node attributes and subgraphs."""
+    yield from graph.initializer
+    for sparse in graph.sparse_initializer:
+        yield sparse.values
+        yield sparse.indices
+    for node in graph.node:
+        for attr in node.attribute:
+            if attr.HasField("t"):
+                yield attr.t
+            yield from attr.tensors
+            if attr.HasField("g"):
+                yield from _iter_graph_tensors(attr.g)
+            for subgraph in attr.graphs:
+                yield from _iter_graph_tensors(subgraph)
+
+
+def _external_data_locations(model_path: Path) -> list[str]:
     _ensure_onnx()
     model = onnx.load(str(model_path), load_external_data=False)
-    external_location = getattr(onnx.TensorProto, "EXTERNAL", 1)
-    for initializer in model.graph.initializer:
-        if int(getattr(initializer, "data_location", 0)) == int(external_location):
-            return True
-        if getattr(initializer, "external_data", None):
-            return True
-    return False
+    locations = set()
+    for tensor in _iter_graph_tensors(model.graph):
+        if tensor.data_location != onnx.TensorProto.EXTERNAL:
+            continue
+        for entry in tensor.external_data:
+            if entry.key == "location":
+                locations.add(entry.value)
+    return sorted(locations)
 
 
 def collect_model_sidecars(model_path: str) -> list[Path]:
+    """External-data files the model references, to be shipped alongside it.
+
+    qc names the sidecar `<model stem>.data`; older artifacts and AI Hub bundles
+    use `model.data`. The graph is read when `onnx` is importable (host). On the
+    target, where `onnx` is not installed, the known names are probed instead.
+    """
     model = Path(model_path).expanduser().resolve()
+    try:
+        locations = _external_data_locations(model)
+    except RuntimeError:
+        for name in (f"{model.stem}.data", "model.data"):
+            candidate = model.with_name(name)
+            if candidate.is_file():
+                return [candidate]
+        return []
+
     sidecars: list[Path] = []
-    candidate = model.with_name("model.data")
-    if candidate.is_file():
+    for location in locations:
+        candidate = model.parent / location
+        if not candidate.is_file():
+            raise RuntimeError(
+                f"ONNX model {model} references external tensor data "
+                f"'{location}', but {candidate} is missing."
+            )
         sidecars.append(candidate)
     return sidecars
 
@@ -645,15 +683,7 @@ def resolve_onnx_model_artifact(model_path: str) -> ResolvedONNXArtifact:
             )
 
         resolved_model = model_members[0].resolve()
-        resolved_sidecars: list[Path] = []
-        data_member = resolved_model.with_name("model.data")
-        if data_member.is_file():
-            resolved_sidecars.append(data_member)
-        elif _onnx_bundle_uses_external_data(resolved_model):
-            raise RuntimeError(
-                f"ONNX bundle {requested} contains model.onnx that references external "
-                "tensor data, but model.data is missing."
-            )
+        resolved_sidecars = collect_model_sidecars(str(resolved_model))
 
         print(
             f"[warn] ONNX bundle input detected: {requested}. "
