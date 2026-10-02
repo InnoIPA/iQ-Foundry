@@ -51,6 +51,17 @@ except ModuleNotFoundError:
     )
 
 try:
+    from tool.inference_tflite import (
+        EXPECTED_BOX_CHANNELS,
+        _select_box_and_class_outputs,
+    )
+except ModuleNotFoundError:
+    from inference_tflite import (
+        EXPECTED_BOX_CHANNELS,
+        _select_box_and_class_outputs,
+    )
+
+try:
     from tool.qairt_inference import (
         ADBQAIRTRawModel,
         QAIRTRawModel,
@@ -626,69 +637,19 @@ def prepare_shared_int8_inputs(
 def _find_boxes_scores(
     outputs: list[np.ndarray], details: list[dict]
 ) -> tuple[np.ndarray, np.ndarray]:
-    box_candidates: list[tuple[np.ndarray, int]] = []
-    cls_candidates: list[np.ndarray] = []
-    for arr, det in zip(outputs, details, strict=True):
-        x = maybe_dequant(arr, det)
-        shp = tuple(int(v) for v in x.shape)
-        if len(shp) != 3 or shp[0] != 1:
-            continue
-
-        if shp[1] in (4, 64):
-            box_candidates.append((x, 2))
-        elif shp[2] in (4, 64):
-            box_candidates.append((x, 1))
-        else:
-            cls_candidates.append(x)
-
-    if len(box_candidates) != 1:
-        shapes = [tuple(o.shape) for o in outputs]
-        raise RuntimeError(
-            f"Could not uniquely identify raw box tensor. Shapes={shapes}"
-        )
-
-    boxes, anchor_axis = box_candidates[0]
-    anchor_count = int(boxes.shape[anchor_axis])
-    matching_cls = [
-        s
-        for s in cls_candidates
-        if int(s.shape[1]) == anchor_count or int(s.shape[2]) == anchor_count
-    ]
-    if not matching_cls:
+    selected = _select_box_and_class_outputs(
+        [(det.get("name"), arr.shape) for arr, det in zip(outputs, details, strict=True)]
+    )
+    if selected is None:
         shapes = [tuple(o.shape) for o in outputs]
         raise RuntimeError(
             f"Could not locate raw boxes/scores tensors. Shapes={shapes}"
         )
-
-    def class_dim(arr: np.ndarray) -> int:
-        if int(arr.shape[1]) == anchor_count:
-            return int(arr.shape[2])
-        return int(arr.shape[1])
-
-    scores = sorted(matching_cls, key=class_dim, reverse=True)[0]
-    return boxes, scores
-
-
-def _extract_box_layout(shape: tuple[int, ...]) -> tuple[int, int] | None:
-    if len(shape) != 3 or int(shape[0]) != 1:
-        return None
-    if int(shape[1]) in (4, 64):
-        return int(shape[1]), int(shape[2])
-    if int(shape[2]) in (4, 64):
-        return int(shape[2]), int(shape[1])
-    return None
-
-
-def _class_dim_for_anchor_count(
-    shape: tuple[int, ...], anchor_count: int
-) -> int | None:
-    if len(shape) != 3 or int(shape[0]) != 1:
-        return None
-    if int(shape[2]) == anchor_count:
-        return int(shape[1])
-    if int(shape[1]) == anchor_count:
-        return int(shape[2])
-    return None
+    box_idx, cls_idx = selected
+    return (
+        maybe_dequant(outputs[box_idx], details[box_idx]),
+        maybe_dequant(outputs[cls_idx], details[cls_idx]),
+    )
 
 
 def _litert_interpreter_cls():
@@ -704,51 +665,25 @@ def _litert_interpreter_cls():
     return Interpreter
 
 
-def _extract_tflite_class_count(model_path: Path) -> int:
+def _extract_tflite_class_count(
+    model_path: Path, expected_box_channels: int | None = None
+) -> int:
     Interpreter = _litert_interpreter_cls()
 
     interp = Interpreter(model_path=str(model_path))
     interp.allocate_tensors()
     output_details = interp.get_output_details()
-
-    box_candidates = []
-    cls_candidates = []
-    for detail in output_details:
-        shape = tuple(int(v) for v in detail["shape"])
-        box_layout = _extract_box_layout(shape)
-        if box_layout is not None:
-            _, anchor_count = box_layout
-            if anchor_count == 8400:
-                box_candidates.append(detail)
-            continue
-        cls_dim = _class_dim_for_anchor_count(shape, anchor_count=8400)
-        if cls_dim is not None:
-            cls_candidates.append((detail, cls_dim))
-
-    if len(box_candidates) != 1:
+    selected = _select_box_and_class_outputs(
+        [(d.get("name"), d["shape"]) for d in output_details],
+        expected_box_channels=expected_box_channels,
+    )
+    if selected is None:
         raise RuntimeError(
-            "Could not uniquely identify TFLite box output for class-count validation. "
+            "Could not identify TFLite box/class outputs for class-count validation. "
             f"Shapes={[tuple(int(v) for v in d['shape']) for d in output_details]}"
         )
-
-    anchor_count = _extract_box_layout(
-        tuple(int(v) for v in box_candidates[0]["shape"])
-    )[1]
-    matching_cls = [
-        cls_dim
-        for detail, cls_dim in cls_candidates
-        if _class_dim_for_anchor_count(
-            tuple(int(v) for v in detail["shape"]), anchor_count
-        )
-        is not None
-    ]
-    if not matching_cls:
-        raise RuntimeError(
-            "Could not identify TFLite class output for class-count validation. "
-            f"Shapes={[tuple(int(v) for v in d['shape']) for d in output_details]}"
-        )
-
-    return int(max(matching_cls))
+    shape = [int(v) for v in output_details[selected[1]]["shape"]]
+    return shape[1] if shape[2] == 8400 else shape[2]
 
 
 def normalize_raw_pair(
@@ -1264,7 +1199,10 @@ def validate_eval_class_count_compatibility(
 ) -> None:
     fp_class_count = len(reference_class_names)
     if runtime == "litert":
-        candidate_class_count = _extract_tflite_class_count(converted_model_path)
+        candidate_class_count = _extract_tflite_class_count(
+            converted_model_path,
+            expected_box_channels=EXPECTED_BOX_CHANNELS.get(model_type),
+        )
     elif runtime == "onnx":
         candidate_class_count = load_onnx_model_metadata(
             str(converted_model_path),

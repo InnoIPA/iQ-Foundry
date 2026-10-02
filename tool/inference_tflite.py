@@ -71,46 +71,65 @@ def _class_dim_for_anchor_count(shape: Sequence[int], anchor_count: int) -> int 
     return None
 
 
-def _resolve_raw_output_details(output_details: Sequence[dict]) -> tuple[dict, dict]:
-    box_candidates: list[tuple[dict, int]] = []
-    cls_candidates: list[tuple[dict, int]] = []
+def _output_order_key(name: str | None, position: int) -> tuple[int, int]:
+    """Graph output order; converted models name their outputs output_0, output_1."""
+    if name and name.startswith("output_") and name[len("output_") :].isdigit():
+        return int(name[len("output_") :]), position
+    return position, position
 
-    for od in output_details:
-        shp = tuple(int(x) for x in od["shape"])
-        box_layout = _extract_box_layout(shp)
-        if box_layout is not None:
-            box_channels, anchor_count = box_layout
-            if anchor_count == 8400:
-                box_candidates.append((od, box_channels))
+
+def _select_box_and_class_outputs(
+    outputs: Sequence[tuple[str | None, Sequence[int]]],
+    expected_box_channels: int | None = None,
+    anchor_count: int = 8400,
+) -> tuple[int, int] | None:
+    """Return (box_index, class_index) into `outputs`, or None.
+
+    A class tensor with 4 or 64 classes has the same shape as a box tensor, so
+    shape alone cannot tell them apart. Candidates are narrowed by the box
+    channel count expected for --type (when known), and any remaining tie is
+    broken by output order: every iQ-Foundry export returns (boxes, scores).
+    """
+    channels: dict[int, int] = {}
+    for idx, (_, shape) in enumerate(outputs):
+        shp = tuple(int(x) for x in shape)
+        if len(shp) != 3 or shp[0] != 1:
             continue
+        if shp[2] == anchor_count:
+            channels[idx] = shp[1]
+        elif shp[1] == anchor_count:
+            channels[idx] = shp[2]
+    box_candidates = [idx for idx, ch in channels.items() if ch == expected_box_channels]
+    if not box_candidates:
+        # Unknown --type, or a model of another family: keep the shape rule so the
+        # caller's --type mismatch check can still report it clearly.
+        box_candidates = [idx for idx, ch in channels.items() if ch in (4, 64)]
+    if not box_candidates:
+        return None
+    order = {idx: _output_order_key(outputs[idx][0], idx) for idx in channels}
+    box_idx = min(box_candidates, key=order.__getitem__)
+    cls_candidates = [idx for idx in channels if idx != box_idx]
+    if not cls_candidates:
+        return None
+    return box_idx, min(cls_candidates, key=order.__getitem__)
 
-        class_dim = _class_dim_for_anchor_count(shp, anchor_count=8400)
-        if class_dim is not None:
-            cls_candidates.append((od, class_dim))
 
-    if len(box_candidates) != 1:
+def _resolve_raw_output_details(
+    output_details: Sequence[dict],
+    expected_box_channels: int | None = None,
+) -> tuple[dict, dict]:
+    selected = _select_box_and_class_outputs(
+        [(od.get("name"), od["shape"]) for od in output_details],
+        expected_box_channels=expected_box_channels,
+    )
+    if selected is None:
         output_shapes = [tuple(int(x) for x in od["shape"]) for od in output_details]
         raise RuntimeError(
-            "Expected exactly one box output with shape "
-            f"[1,4/64,8400] or [1,8400,4/64], got {output_shapes}"
+            "Expected a box output [1,4/64,8400] and a class output [1,C,8400] "
+            f"(or their [1,8400,*] transposes), got {output_shapes}"
         )
-
-    box_od, _ = box_candidates[0]
-    anchor_count = _extract_box_layout(box_od["shape"])[1]
-    matching_cls = [
-        (od, class_dim)
-        for od, class_dim in cls_candidates
-        if _class_dim_for_anchor_count(od["shape"], anchor_count) is not None
-    ]
-    if not matching_cls:
-        output_shapes = [tuple(int(x) for x in od["shape"]) for od in output_details]
-        raise RuntimeError(
-            "Expected class output [1,C,8400] or [1,8400,C], "
-            f"got {output_shapes}"
-        )
-
-    cls_od, _ = sorted(matching_cls, key=lambda pair: pair[1], reverse=True)[0]
-    return box_od, cls_od
+    box_idx, cls_idx = selected
+    return output_details[box_idx], output_details[cls_idx]
 
 
 def _extract_class_count_from_output_details(output_details: Sequence[dict]) -> int:

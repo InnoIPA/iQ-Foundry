@@ -54,6 +54,7 @@ EXPECTED_BOX_MODES = {
     "yolov11": "dfl64",
     "yolov26": "ltrb4",
 }
+BOX_MODE_CHANNELS = {"dfl64": 64, "ltrb4": 4}
 DEFAULT_TFLITE_QNN_LIB = "/usr/lib/libQnnTFLiteDelegate.so"
 DEFAULT_ORT_QNN_BACKEND_PATH = "libQnnHtp.so"
 
@@ -462,6 +463,49 @@ def _class_dim_for_anchor_count(shape: Sequence[int], anchor_count: int) -> int 
     return None
 
 
+def _output_order_key(name: str | None, position: int) -> tuple[int, int]:
+    """Graph output order; converted models name their outputs output_0, output_1."""
+    if name and name.startswith("output_") and name[len("output_") :].isdigit():
+        return int(name[len("output_") :]), position
+    return position, position
+
+
+def _select_box_and_class_outputs(
+    outputs: Sequence[tuple[str | None, Sequence[int]]],
+    expected_box_channels: int | None = None,
+    anchor_count: int = 8400,
+) -> tuple[int, int] | None:
+    """Return (box_index, class_index) into `outputs`, or None.
+
+    A class tensor with 4 or 64 classes has the same shape as a box tensor, so
+    shape alone cannot tell them apart. Candidates are narrowed by the box
+    channel count expected for --type (when known), and any remaining tie is
+    broken by output order: every iQ-Foundry export returns (boxes, scores).
+    """
+    channels: dict[int, int] = {}
+    for idx, (_, shape) in enumerate(outputs):
+        shp = tuple(int(x) for x in shape)
+        if len(shp) != 3 or shp[0] != 1:
+            continue
+        if shp[2] == anchor_count:
+            channels[idx] = shp[1]
+        elif shp[1] == anchor_count:
+            channels[idx] = shp[2]
+    box_candidates = [idx for idx, ch in channels.items() if ch == expected_box_channels]
+    if not box_candidates:
+        # Unknown --type, or a model of another family: keep the shape rule so the
+        # caller's --type mismatch check can still report it clearly.
+        box_candidates = [idx for idx, ch in channels.items() if ch in (4, 64)]
+    if not box_candidates:
+        return None
+    order = {idx: _output_order_key(outputs[idx][0], idx) for idx in channels}
+    box_idx = min(box_candidates, key=order.__getitem__)
+    cls_candidates = [idx for idx in channels if idx != box_idx]
+    if not cls_candidates:
+        return None
+    return box_idx, min(cls_candidates, key=order.__getitem__)
+
+
 def _normalize_output_layout(
     tensor,
     *,
@@ -726,28 +770,19 @@ def load_onnx_model_metadata(
     input_layout = _resolve_input_layout(input_meta.shape)
     input_dtype = ort_type_to_numpy_dtype(input_meta.type)
 
-    box_meta = None
-    class_meta = None
-    box_mode = None
-    class_count = None
-    for output_meta in outputs:
-        shape = tuple(int(v) for v in output_meta.shape)
-        box_layout = _extract_box_layout(shape)
-        if box_layout is not None and box_layout[1] == 8400:
-            box_meta = output_meta
-            box_mode = "dfl64" if box_layout[0] == 64 else "ltrb4"
-            continue
-
-        cls_dim = _class_dim_for_anchor_count(shape, anchor_count=8400)
-        if cls_dim is not None:
-            class_meta = output_meta
-            class_count = int(cls_dim)
-
-    if box_meta is None or class_meta is None or box_mode is None or class_count is None:
+    selected = _select_box_and_class_outputs(
+        [(o.name, o.shape) for o in outputs],
+        expected_box_channels=BOX_MODE_CHANNELS.get(EXPECTED_BOX_MODES.get(model_type)),
+    )
+    if selected is None:
         raise RuntimeError(
             "Could not identify raw ONNX box/class outputs. "
             f"Outputs were: {[(o.name, tuple(int(v) for v in o.shape), o.type) for o in outputs]}"
         )
+    box_meta = outputs[selected[0]]
+    class_meta = outputs[selected[1]]
+    box_mode = "dfl64" if _extract_box_layout(box_meta.shape)[0] == 64 else "ltrb4"
+    class_count = int(_class_dim_for_anchor_count(class_meta.shape, anchor_count=8400))
 
     resolved_box_quant = box_quant
     resolved_class_quant = class_quant
