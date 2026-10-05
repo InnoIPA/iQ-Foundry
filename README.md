@@ -188,6 +188,41 @@
   </table>
 </div>
 
+## Release Versions
+
+<div align="center">
+  <table>
+    <thead>
+      <tr>
+        <th>Version</th>
+        <th>Tag</th>
+        <th>Docker Image</th>
+        <th>Known Issues</th>
+        <th>How to Troubleshoot</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>QLI1.8</td>
+        <td><code>v0.0.3</code></td>
+        <td><code>innodiskorg/iqf:v0.0.3</code></td>
+        <td>None</td>
+        <td>N/A</td>
+      </tr>
+      <tr>
+        <td>QLI2.0</td>
+        <td><code>v1.0.0</code></td>
+        <td><code>innodiskorg/iqf:latest</code></td>
+        <td>Ubuntu ADB connection issue (device offline)<br>Windows currently only supports QC mode</td>
+        <td>Restart the device</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+> [!NOTE]
+> The default Docker image tag is `latest`. For QLI1.8, run `export IQF_DOCKER_IMAGE=innodiskorg/iqf:v0.0.3` in your terminal.
+
 ## Explore Other Documentation
 
 <div align="center">
@@ -204,6 +239,11 @@
         <td><a href="./docs/other_model_flow.md"><code>docs/other_model_flow.md</code></a></td>
         <td>High-level flow guide for unsupported or custom models outside the current native iQ-Foundry path.</td>
         <td>You want to explore bring-your-own-model onboarding beyond the built-in workflows.</td>
+      </tr>
+      <tr>
+        <td><a href="./docs/iqf_assistant.md"><code>docs/iqf_assistant.md</code></a></td>
+        <td>Guide to the <code>iqf-assistant</code> agent skill, which runs <code>qc</code>, <code>mAP</code> and <code>test</code> for you through a chat with Claude Code or Codex.</td>
+        <td>You prefer chatting with a coding agent over typing commands, or you are new to iQ-Foundry.</td>
       </tr>
       <tr>
         <td><a href="./docker/Docker.md"><code>docker/Docker.md</code></a></td>
