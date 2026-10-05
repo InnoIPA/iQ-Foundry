@@ -16,6 +16,8 @@
   <img src="./docs/Images/support-runtime-precision.png" alt="Supported runtime and precision combinations" width="420">
   <br>
   <strong>New in v1.0.0:</strong> QAIRT offline conversion with INT8, W8A16 and FP16 support!!
+  <br>
+  🤖 <a href="./docs/iqf_assistant.md">Use iQ-Foundry with your coding agent</a>
 </p>
 
 `iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible computer vision `.pt` models into `.tflite`, `.onnx`, and QAIRT `.bin` HTP context binary artifacts, validating reference-versus-converted quality with mAP@0.5, and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
