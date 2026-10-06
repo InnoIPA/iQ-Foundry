@@ -1,5 +1,43 @@
 # Changelogs
 
+## v1.0.0
+
+### features
+- Added QAIRT (Qualcomm AI Runtime) support for `qc`, `test`, and `mAP`, covering QAIRT INT8, W8A16, and FP16 flows for `yolov10`, `yolov11`, and `yolov26`.
+- Added offline conversion for QAIRT: `qc` builds a pre-compiled HTP context binary locally through ONNX export, `qairt-converter`, `qairt-quantizer`, and `qnn-context-binary-generator`, with no Qualcomm AI Hub account and no device-side compilation.
+- Added `tool/qairt_inference.py` for QAIRT execution, reusing the shared geometry, decode, NMS, and drawing helpers so all three runtimes produce identical detections from identical tensors.
+- Added the vendored QAIRT `2.47.0.260601` host toolchain under `vendor/qairt/`, including the five OS libraries the container image does not provide, so no image rebuild is required.
+- Added QAIRT `.bin` output naming for `qc`, and QAIRT rows to the runtime and precision matrix in both `./docker/iqf` and backend `cli.py`.
+- Added QLI2.0 target support by replacing TensorFlow with `ai-edge-litert==2.2.0` on both host and target (`requirements/host.txt`, `requirements/target.txt`), and switching `tool/inference_tflite.py`, `tool/remote_tflite_raw_runner.py`, and `tool/test_map.py` to the LiteRT interpreter. QLI2.0 ships Python 3.14, for which TensorFlow has no wheel.
+- Moved the target `numpy` pin to `2.5.3` for Python 3.14 (no cp314 wheel exists for `1.26.4`); the host stays on `1.26.4` because `torch==2.4.1` requires `numpy<2`.
+- Replaced the bundled ORT-QNN wheel (`1.23.0` cp312) with the `1.25.1` cp314 aarch64 build for the QLI2.0 target.
+- Added a version check to the on-device `onnxruntime` bootstrap in `tool/adb_runtime_bootstrap.py`: a mismatch against the bundled wheel now uninstalls the existing `onnxruntime`/`onnxruntime-qnn`, reinstalls the wheel, and verifies the installed version.
+- Added the `iqf-assistant` agent skill (`.agents/skills/iqf-assistant/`, symlinked for Claude Code) so users can run `qc`, `mAP`, and `test` by chatting with a coding agent. It includes a read-only host setup checker (`check_setup.py`, `check_setup_windows.ps1`), a token-safe QAI Hub login (`hub_login.py`), a detached job runner (`iqf_job.py`), a mAP data inspector and reformatter (`prepare_map_data.py`), troubleshooting references, and offline tests.
+- Added an end-to-end pipeline regression suite: `regression/pipelines.yaml` (21 pipelines across model type, runtime, and precision), the deterministic runner `tool/test/regression/run_pipelines.py` (`qc` -> `mAP` -> `test`, detached runs, QAI Hub token masking), the `iqf-pipeline-regression` agent skill, and offline tests in `tests/test_regression_runner.py`.
+
+### refactor
+- Moved the calibration loader, ONNX finalize step, and QAIRT conversion helpers, previously copied verbatim into each model file, into a single `yolo_models/common.py` shared by `yolov10`, `yolov11`, and `yolov26`.
+- Removed dead code from `cli.py`, `tool/inference_tflite.py`, `tool/test_map.py`, `tool/onnx_inference.py`, `tool/qairt_inference.py`, and the regression runner.
+
+### docs
+- Updated `README.md` with a QAIRT runtime logo cell, an `FP16` column in the runtime-versus-precision support matrix, and a v1.0.0 feature callout.
+- Reworked `docs/qc_mode.md`, `docs/test_mode.md`, and `docs/mAP_mode.md` to document the QAIRT matrix, QAIRT calibration behavior, context-binary handling, and runtime-specific execution notes.
+- Scoped the Qualcomm AI Hub references to `litert` and `onnx`, since `qairt` converts offline and needs no API token.
+- Added an ADB troubleshooting note to `docs/test_mode.md` and `docs/mAP_mode.md` covering the host-side `adb` server holding the USB interface.
+- Updated `Ubuntu_host.md` and `Windows_host.md` with the QAIRT runtime and precision combinations.
+- Documented the vendored QAIRT SDK in `requirements/host.txt` and recorded that the QAIRT target path installs nothing on device.
+- Added `docs/iqf_assistant.md` with usage instructions for the `iqf-assistant` skill, and linked it from `Ubuntu_host.md`, `Windows_host.md`, `docs/qc_mode.md`, `docs/test_mode.md`, and `docs/mAP_mode.md`.
+- Updated the workflow, QC overview, and runtime/precision images, and added the QAIRT logo.
+- Updated the ORT-QNN wheel filename in `docs/test_mode.md`.
+- Corrected the `--remote-workdir` default in `docs/mAP_mode.md` to `/data/local/tmp/yolo_map_eval`.
+
+### fixes
+- Fixed box/class output selection for models with 4 or 64 classes: outputs are now narrowed by the box channels expected for `--type` and ties are broken by export order, which resolves the "Expected exactly one box output" and "Could not identify raw ONNX box/class outputs" errors in LiteRT and ONNX `test` and `mAP`.
+- Fixed ONNX `qc` overwriting `model.data` when several models share an output directory: each artifact now gets a self-contained `<stem>.data` sidecar with the graph reference rewritten, the downloaded `.onnx.zip` is removed once unpacked, and ADB runs push the correct sidecar via `collect_model_sidecars`.
+- Fixed the container's `adb` missing the board when a host-side `adb` server held the USB interface: the wrapper now stops the host server before ADB runs (`--dry-run` prints the step).
+- Fixed host `onnxruntime` to `1.23.2` (from `1.22.0`) so ONNX IR v11 models, such as W8A16, load.
+- Cleared lint debt introduced by the QAIRT runtime in `tool/onnx_inference.py`, `tool/qairt_inference.py`, and `tool/test_map.py`.
+
 ## v0.0.3
 
 ### features

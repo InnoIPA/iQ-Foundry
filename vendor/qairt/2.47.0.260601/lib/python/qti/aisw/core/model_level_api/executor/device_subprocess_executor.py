@@ -1,0 +1,413 @@
+#==============================================================================
+#
+#  Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+#  All rights reserved.
+#  Confidential and Proprietary - Qualcomm Technologies, Inc.
+#
+#==============================================================================
+
+import logging
+import os
+import weakref
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, AnyStr, Dict, List, Optional, Tuple, Union
+from uuid import uuid4
+
+import numpy as np
+
+if TYPE_CHECKING:
+    from qti.aisw.tools.core.modules.net_runner import InferenceConfig
+from qti.aisw.core.model_level_api.executor.executor import Executor
+from qti.aisw.core.model_level_api.target.target import Target
+from qti.aisw.core.model_level_api.utils.exceptions import (
+    ContextBinaryGenerationError,
+    InferenceError,
+    NetRunErrorCode,
+    return_code_to_netrun_error_enum,
+)
+from qti.aisw.core.model_level_api.utils.subprocess_executor import (
+    create_op_package_argument,
+    create_set_output_tensors_argument,
+    generate_config_file,
+    generate_input_list,
+    update_run_config_native_inputs,
+)
+from qti.aisw.core.model_level_api.workflow.workflow import WorkflowMode
+from qti.aisw.tools.core.modules.api import (
+    generate_net_runner_cli_args,
+)
+from qti.aisw.tools.core.modules.api.backend.backend import Backend
+from qti.aisw.tools.core.modules.api.definitions import ModelConfig, ModelType
+from qti.aisw.tools.core.utilities.devices.api.device_definitions import DevicePlatformType
+
+NamedTensorData = Dict[str, np.ndarray]
+InputTensorData = Union[NamedTensorData, Path, List[NamedTensorData], List[np.ndarray]]
+
+logger = logging.getLogger(__name__)
+
+
+class DeviceTempDirectory:
+    """
+    This class is used to create and manage a temporary directory on a target device.
+    The directory is created when an instance of the class is initialized, and it is
+    automatically removed when the instance is destroyed or when used in a context
+    manager ('with' statement). The class ensures that the temporary directory is
+    cleaned up, either manually or during garbage collection, preventing orphaned
+    directories on the device.
+    """
+
+    def __init__(self, directory_name: str, target: Target, prefix: str = '/data/local/tmp'):
+        self.name = target.file_sep.join([prefix, directory_name])
+        self._target = target
+
+        logger.debug(f"Creating temp dir {self.name}")
+        self._target.make_directory(self.name)
+
+        """
+        create a callable that will be called upon garbage collection if it is not used as a
+        context manager. This finalizer can only be called once, so if it is used as a context
+        manager, it is called during __exit__ and will be a no-op when it is subsequently
+        garbage collected
+        """
+        self._finalizer = weakref.finalize(self, self._cleanup, self.name, self._target)
+
+    def __enter__(self):
+        return self.name
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # mark the finalizer as dead so _cleanup is not redundantly called during garbage collection
+        self._finalizer.detach()
+        self._cleanup(self.name, self._target)
+
+    @classmethod
+    def _cleanup(cls, name, target):
+        logger.debug(f"Deleting temp dir {name}")
+        target.remove(name)
+
+
+class DeviceSubprocessExecutor(Executor):
+    """
+    Intermediate class for executors that manage execution on devices with shared
+    artifacts pushing and preparation
+    """
+
+
+    def __init__(self, device_temp_dir_prefix='/data/local/tmp'):
+        super().__init__()
+
+        self._device_temp_dir_prefix = device_temp_dir_prefix
+        self._artifact_directory = None
+        self._setup = False
+
+    def setup(self, workflow_mode: WorkflowMode, backend: Backend, model: ModelConfig,
+              sdk_root: str, config: Optional['InferenceConfig'], output_dir: str) -> None:
+        """
+        Configures the environment and sets up necessary artifacts for the workflow.
+
+        This method prepares the system for either inference or context binary generation workflows
+        by validating and pushing required artifacts to the target device. It also sets up the
+        temporary directory for storing these artifacts on the device.
+
+        Args:
+            workflow_mode (WorkflowMode): Specifies the workflow type
+            backend (Backend): The backend configuration, including target and library requirements.
+            model (ModelConfig): The model to be used in the workflow, along with its associated artifacts.
+            sdk_root (str): Path to the root of the SDK, where binaries and libraries are located.
+            config (Optional[InferenceConfig]): Optional configuration for running inference.
+                                                If not provided, this will be cached for future use.
+            output_dir (str): Directory for output artifacts generated by the workflow.
+
+        Raises:
+            RuntimeError: If the provided workflow_mode is unknown.
+            FileNotFoundError: If the required executable or backend library is missing.
+
+        Returns:
+            None
+        """
+
+        # cache the run config in case one is not provided to run_inference(), in which case this
+        # config will be used
+        self._run_config = config
+
+        artifacts_to_push = []
+        sdk_root = Path(sdk_root)
+
+        if workflow_mode == WorkflowMode.INFERENCE:
+            executable_name = 'qnn-net-run'
+        elif workflow_mode == WorkflowMode.CONTEXT_BINARY_GENERATION:
+            executable_name = 'qnn-context-binary-generator'
+        else:
+            raise RuntimeError(f'Unknown WorkflowMode {workflow_mode}')
+
+        executable_path = sdk_root / 'bin' / backend.target.target_name / executable_name
+        if not executable_path.is_file():
+            raise FileNotFoundError(f'Could not find executable {executable_path}')
+        artifacts_to_push.append(executable_path)
+
+        backend_lib_path = sdk_root / 'lib' / backend.target.target_name / backend.backend_library
+        if not backend_lib_path.is_file():
+            raise FileNotFoundError(f'Could not find backend library: {backend_lib_path}')
+        artifacts_to_push.append(backend_lib_path)
+
+        backend_required_artifacts = [Path(artifact)
+                                      for artifact in backend.get_required_device_artifacts(str(sdk_root))]
+        artifacts_to_push.extend(backend_required_artifacts)
+
+        artifacts_to_push.extend(self._get_model_artifacts(model, sdk_root))
+
+        # generate a random uuid which will be used as a directory name on device
+        random_uuid_str = str(uuid4())
+        self._artifact_directory = DeviceTempDirectory(random_uuid_str, backend.target,
+                                                       prefix=self._device_temp_dir_prefix)
+        for artifact in artifacts_to_push:
+            backend.target.push(str(artifact), self._artifact_directory.name)
+        if backend.target.target_platform_type in {DevicePlatformType.ANDROID, DevicePlatformType.LINUX_EMBEDDED}:
+            backend.target.run_command(f"chmod +x {self._artifact_directory.name}/{executable_name}")
+        self._setup = True
+
+        # no profiling data generated
+        return None
+
+    def run_inference(
+        self, config, backend, model, sdk_root, input_data, output_dir, graph_name
+    ):
+        raise NotImplementedError("run inference method should be implemented in the subclass")
+
+    def generate_context_binary(self, config, backend, model, sdk_root, output_path,
+                                output_filename):
+        raise NotImplementedError("run inference method should be implemented in the subclass")
+
+    @staticmethod
+    def _get_model_artifacts(model: ModelConfig,
+                             sdk_root: Union[str, os.PathLike]) -> Tuple[os.PathLike, ...]:
+        raise NotImplementedError("Method: _get_model_artifacts should be implemented in the "
+                                  "subclass")
+
+    def prepare_temp_directories(self, backend: Backend) -> tuple[TemporaryDirectory,
+                                                                  DeviceTempDirectory]:
+        """
+        Creates temporary directories on both host and device for processing.
+
+        Args:
+            backend: The backend that will be used to run inference.
+
+        Returns:
+            TemporaryDirectory, DeviceTempDirectory
+        """
+        temp_directory = TemporaryDirectory()
+        logger.debug(f"created temp dir: {temp_directory.name}")
+
+        temp_dir_name = Path(temp_directory.name).name
+        device_temp_directory = DeviceTempDirectory(temp_dir_name,
+                                                    backend.target,
+                                                    prefix=self._device_temp_dir_prefix)
+
+        return temp_directory, device_temp_directory
+
+    @staticmethod
+    def generate_input_output_files(backend: Backend,
+                                    sdk_root: str,
+                                    temp_directory: TemporaryDirectory,
+                                    device_temp_directory: DeviceTempDirectory,
+                                    input_data: Optional[InputTensorData] = None,
+                                    is_execution: bool = True) -> Tuple[str, List[str], str, List[str], str]:
+        """
+        Generate necessary input and config files for the inference process.
+
+        Args:
+            backend: The backend being used.
+            sdk_root: The SDK root directory.
+            input_data: The input data for the inference.
+            temp_directory: Temporary directory on the host machine.
+            device_temp_directory: Temporary directory on the device.
+            is_execution: If set to True, an input list text will be generated
+        Returns:
+            input list filename, input files, config file arg, config file artifacts,
+            op package arg, and op package artifacts
+        """
+        input_list_filename = ""
+        input_files = []
+
+        if input_data is None:
+            input_data = []
+
+        if is_execution:
+            input_list_filename, input_files = generate_input_list(input_data,
+                                                                   temp_directory.name,
+                                                                   device_temp_directory)
+        config_file_arg, config_file_artifacts = generate_config_file(backend,
+                                                                      temp_directory.name,
+                                                                      sdk_root,
+                                                                      device_temp_directory)
+        op_package_args = create_op_package_argument(backend, device_temp_directory)
+
+        return (input_list_filename, input_files, config_file_arg,
+                config_file_artifacts, op_package_args)
+
+    @staticmethod
+    def push_artifacts_to_device(backend: Backend,
+                                 device_temp_directory: str,
+                                 input_list_filename: str = "",
+                                 input_files: List[str] = [],
+                                 config_file_artifacts: List[str] = [],
+                                 op_package_artifacts: str = "",
+                                 is_execution=True) -> None:
+        """
+        Pushes necessary files to the device for inference.
+
+        Args:
+            backend: The backend being used.
+            input_list_filename: The input list file on the host.
+            input_files: List of input files.
+            config_file_artifacts: Config file artifacts to be pushed.
+            op_package_artifact: Op package artifact to be pushed.
+            device_temp_directory: Temporary directory on the device.
+            is_execution: Flag for pushing input files for execution vs for context binary
+        """
+
+        if is_execution:
+            backend.target.push(input_list_filename,
+                                PurePosixPath(device_temp_directory, 'input_list.txt'))
+            for input_file in input_files:
+                input_file, _, input_file_rename = input_file.partition(';')
+                dest_filepath = PurePosixPath(device_temp_directory, input_file_rename)
+                backend.target.push(input_file, str(dest_filepath))
+
+        for artifact in config_file_artifacts:
+            backend.target.push(artifact, device_temp_directory)
+
+    def execute_inference(self,
+                          backend: Backend,
+                          model: ModelConfig,
+                          config:  Optional['InferenceConfig'],
+                          config_file_arg: str,
+                          op_package_arg: str,
+                          set_output_tensors_arg: str,
+                          device_temp_directory: str,
+                          device_output_dir: PurePosixPath,
+                          command_env: Dict[str, str],
+                          input_data: Optional[InputTensorData] = None,
+                          graph_name: Optional[str] = None) -> Tuple[int,
+                                                           Optional[AnyStr],
+                                                           Optional[AnyStr]]:
+        """Executes the inference command on the device.
+
+        Args:
+            backend: The backend being used.
+            model: The model being used.
+            config: Configuration for running inference.
+            config_file_arg: Argument for a config json file
+            op_package_arg: Arguments for custom op package execution
+            set_output_tensors_arg: Pre-built argument string for set_output_tensors
+            device_temp_directory: Temporary directory on the device.
+            device_output_dir: Output directory on the device.
+            command_env: environment variables to set
+            input_data: Input data for the inference.
+            graph_name: The name of the graph for single-graph models.
+
+        Returns:
+            Return code, stdout, and stderr from device command execution.
+        """
+        if input_data is None:
+            input_data = []
+        device_netrun = PurePosixPath(self._artifact_directory.name, 'qnn-net-run')
+        device_backend_lib = PurePosixPath(self._artifact_directory.name, backend.backend_library)
+        model_arg = self._create_inference_model_argument(model, self._artifact_directory.name)
+
+        device_input_list_filename = PurePosixPath(device_temp_directory, 'input_list.txt')
+
+        netrun_command = f'{device_netrun} --backend {device_backend_lib} ' \
+                            f'{model_arg} --input_list {device_input_list_filename} ' \
+                            f'--output_dir {device_output_dir} {config_file_arg} {op_package_arg} ' \
+                            f'{set_output_tensors_arg} '
+
+        from qti.aisw.tools.core.modules.net_runner import (
+            InferenceConfig,  #Lazy import due to circular dependecy
+        )
+        config = config or InferenceConfig()
+        update_run_config_native_inputs(config, input_data)
+
+        netrun_command += generate_net_runner_cli_args(config, graph_name)
+
+        return backend.target.run_command(netrun_command,
+                                          cwd=device_temp_directory,
+                                          env=command_env)
+
+    @staticmethod
+    def handle_context_bin_or_net_run_error(return_code: int,
+                                            stdout: Optional[AnyStr],
+                                            stderr: Optional[AnyStr],
+                                            is_execution: bool = True):
+        """
+        Handles errors during the execution of the context binary generation command
+        or the net-run command.
+
+        Args:
+            return_code: The return code from the command.
+            stdout: The standard output from the command.
+            stderr: The standard error from the command.
+            is_execution: Flag for pushing input files for execution and not context binary
+
+        Raises:
+            ContextBinaryGenerationError or InferenceError: If a known error is encountered.
+            RuntimeError: For general command execution failures.
+        """
+
+        error_enum = return_code_to_netrun_error_enum(return_code)
+        err_str = ""
+        if error_enum:
+            if is_execution:
+                err_str = f"qnn-net-run execution failed, stdout: {stdout}, stderr: {stderr}"
+                raise InferenceError(error_enum, err_str)
+            else:
+                err_str = f"qnn-context-binary-generator failed, stdout: {stdout}, stderr: {stderr}"
+                raise ContextBinaryGenerationError(error_enum, err_str)
+        raise RuntimeError(err_str)
+
+    @classmethod
+    def _create_inference_model_argument(cls, model: ModelConfig, temp_directory: str) -> str:
+        model_path = model.path
+        model_device_path = PurePosixPath(temp_directory, model_path.name)
+        arg_strings = {
+            ModelType.QNN_MODEL_LIBRARY: f"--model {model_device_path}",
+            ModelType.QNN_CONTEXT_BINARY: f"--retrieve_context {model_device_path}",
+            ModelType.DLC: f"--dlc_path {model_device_path}",
+        }
+        result = arg_strings.get(model.model_type)
+        if result is None:
+            raise ValueError("Unsupported model type")
+        return result
+
+    @classmethod
+    def _create_context_binary_generator_model_argument(
+        cls, model: ModelConfig | List[ModelConfig], temp_directory: str
+    ) -> str:
+        model_path = model.path
+        model_device_path = PurePosixPath(temp_directory, model_path.name)
+        model_arg_creators = {
+            ModelType.QNN_MODEL_LIBRARY: f"--model {model_device_path}",
+            ModelType.DLC: f"--dlc_path {model_device_path}",
+        }
+
+        if isinstance(model, list):
+            args = []
+            for m in model:
+                created_arg = model_arg_creators.get(m.model_type)
+                if created_arg is None:
+                    raise ValueError("Unsupported model type")
+                args.append(created_arg)
+            return " ".join(args)
+        else:
+            created_arg = model_arg_creators.get(model.model_type)
+            if created_arg is None:
+                raise ValueError("Unsupported model type")
+            return created_arg
+
+    def teardown(self, backend, sdk_root, config, output_dir):
+        # reassign the temporary directory so its reference count is decremented and gets garbage
+        # collected
+        self._artifact_directory = None
+
+        # no profiling data generated
+        return None

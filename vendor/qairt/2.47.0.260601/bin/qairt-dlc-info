@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+# -*- mode: python -*-
+#==============================================================================
+#
+#  Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+#  All rights reserved.
+#  Confidential and Proprietary - Qualcomm Technologies, Inc.
+#
+#==============================================================================
+
+from __future__ import print_function
+
+import logging
+import argparse
+from argparse import RawTextHelpFormatter
+import os
+import sys
+import traceback
+
+try:
+    from qti.aisw.dlc_utils import snpe_dlc_utils
+except ImportError as ie:
+    print("Failed to find necessary package:")
+    print(str(ie))
+    print("Please ensure that $SNPE_ROOT/lib/python is in your PYTHONPATH")
+    sys.exit(1)
+
+def main():
+    try:
+        parser = argparse.ArgumentParser(description="Reads in a DLC file and outputs layer information to stdout.",
+                                         formatter_class=RawTextHelpFormatter)
+        parser._action_groups.pop()
+        required = parser.add_argument_group('required arguments')
+        required.add_argument('-i', '--input_dlc', metavar="\b", required=True, type=str,
+                              help="Path to a DLC file.")
+
+        optional = parser.add_argument_group('optional arguments')
+        optional.add_argument('-s', '--save', type=str, metavar="\b", required=False,
+                              help="Save the output to a csv file. Specify a target file path.")
+        optional.add_argument('-m', '--display_memory', action="store_true", required=False,
+                              help="Show detailed information about memory usage.")
+        optional.add_argument('-d', '--display_all_encodings', action="store_true", required=False,
+                              help="Show detailed axis-quantization encoding information.")
+        optional.add_argument('-t', '--dump_framework_trace', action="store_true", required=False,
+                              help="Save framework trace info into the csv file that was passed to --save option.")
+
+        if len(sys.argv) == 1:
+            parser.print_help(sys.stderr)
+            sys.exit(1)
+
+        args = parser.parse_args()
+
+        output_file_name = args.save
+        snpe_dlc_utils.setUpLogger(True)
+
+        logger = logging.getLogger()
+        if not os.path.exists(args.input_dlc):
+            logger.debug(f"Cannot find archive DLC file {args.input_dlc}")
+            sys.exit(-1)
+
+        model_info = snpe_dlc_utils.ModelInfo(args.input_dlc)
+        model_info.dump_info(args.display_memory, output_file_name, args.display_all_encodings, args.dump_framework_trace)
+
+    except Exception as e:
+        traceback.print_exc()
+        sys.exit(-2)
+
+if __name__ == "__main__":
+    main()

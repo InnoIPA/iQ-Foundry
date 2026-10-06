@@ -1,0 +1,17 @@
+# Build context excludes. The Dockerfile only COPYs requirements/host.txt, so
+# none of these are needed at build time and they dominate the context size.
+.git/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.iqf/
+.pytest_cache/
+.ruff_cache/
+
+# Large trees: vendored QAIRT SDK, target wheels, datasets and run outputs.
+vendor/
+wheels/
+asset/
+out/
+temp/

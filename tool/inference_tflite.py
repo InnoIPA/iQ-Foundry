@@ -30,8 +30,12 @@ from pathlib import Path
 
 cv2 = None
 np = None
-tf = None
 yaml = None
+# Runtime change (TF -> LiteRT): these two replace the former lazy `tf` global.
+# ai-edge-litert exposes Interpreter/load_delegate with the same signatures as
+# tf.lite.Interpreter / tf.lite.experimental.load_delegate.
+litert_interpreter = None
+litert_load_delegate = None
 
 IMG_W = 640
 IMG_H = 640
@@ -67,46 +71,65 @@ def _class_dim_for_anchor_count(shape: Sequence[int], anchor_count: int) -> int 
     return None
 
 
-def _resolve_raw_output_details(output_details: Sequence[dict]) -> tuple[dict, dict]:
-    box_candidates: list[tuple[dict, int]] = []
-    cls_candidates: list[tuple[dict, int]] = []
+def _output_order_key(name: str | None, position: int) -> tuple[int, int]:
+    """Graph output order; converted models name their outputs output_0, output_1."""
+    if name and name.startswith("output_") and name[len("output_") :].isdigit():
+        return int(name[len("output_") :]), position
+    return position, position
 
-    for od in output_details:
-        shp = tuple(int(x) for x in od["shape"])
-        box_layout = _extract_box_layout(shp)
-        if box_layout is not None:
-            box_channels, anchor_count = box_layout
-            if anchor_count == 8400:
-                box_candidates.append((od, box_channels))
+
+def _select_box_and_class_outputs(
+    outputs: Sequence[tuple[str | None, Sequence[int]]],
+    expected_box_channels: int | None = None,
+    anchor_count: int = 8400,
+) -> tuple[int, int] | None:
+    """Return (box_index, class_index) into `outputs`, or None.
+
+    A class tensor with 4 or 64 classes has the same shape as a box tensor, so
+    shape alone cannot tell them apart. Candidates are narrowed by the box
+    channel count expected for --type (when known), and any remaining tie is
+    broken by output order: every iQ-Foundry export returns (boxes, scores).
+    """
+    channels: dict[int, int] = {}
+    for idx, (_, shape) in enumerate(outputs):
+        shp = tuple(int(x) for x in shape)
+        if len(shp) != 3 or shp[0] != 1:
             continue
+        if shp[2] == anchor_count:
+            channels[idx] = shp[1]
+        elif shp[1] == anchor_count:
+            channels[idx] = shp[2]
+    box_candidates = [idx for idx, ch in channels.items() if ch == expected_box_channels]
+    if not box_candidates:
+        # Unknown --type, or a model of another family: keep the shape rule so the
+        # caller's --type mismatch check can still report it clearly.
+        box_candidates = [idx for idx, ch in channels.items() if ch in (4, 64)]
+    if not box_candidates:
+        return None
+    order = {idx: _output_order_key(outputs[idx][0], idx) for idx in channels}
+    box_idx = min(box_candidates, key=order.__getitem__)
+    cls_candidates = [idx for idx in channels if idx != box_idx]
+    if not cls_candidates:
+        return None
+    return box_idx, min(cls_candidates, key=order.__getitem__)
 
-        class_dim = _class_dim_for_anchor_count(shp, anchor_count=8400)
-        if class_dim is not None:
-            cls_candidates.append((od, class_dim))
 
-    if len(box_candidates) != 1:
+def _resolve_raw_output_details(
+    output_details: Sequence[dict],
+    expected_box_channels: int | None = None,
+) -> tuple[dict, dict]:
+    selected = _select_box_and_class_outputs(
+        [(od.get("name"), od["shape"]) for od in output_details],
+        expected_box_channels=expected_box_channels,
+    )
+    if selected is None:
         output_shapes = [tuple(int(x) for x in od["shape"]) for od in output_details]
         raise RuntimeError(
-            "Expected exactly one box output with shape "
-            f"[1,4/64,8400] or [1,8400,4/64], got {output_shapes}"
+            "Expected a box output [1,4/64,8400] and a class output [1,C,8400] "
+            f"(or their [1,8400,*] transposes), got {output_shapes}"
         )
-
-    box_od, _ = box_candidates[0]
-    anchor_count = _extract_box_layout(box_od["shape"])[1]
-    matching_cls = [
-        (od, class_dim)
-        for od, class_dim in cls_candidates
-        if _class_dim_for_anchor_count(od["shape"], anchor_count) is not None
-    ]
-    if not matching_cls:
-        output_shapes = [tuple(int(x) for x in od["shape"]) for od in output_details]
-        raise RuntimeError(
-            "Expected class output [1,C,8400] or [1,8400,C], "
-            f"got {output_shapes}"
-        )
-
-    cls_od, _ = sorted(matching_cls, key=lambda pair: pair[1], reverse=True)[0]
-    return box_od, cls_od
+    box_idx, cls_idx = selected
+    return output_details[box_idx], output_details[cls_idx]
 
 
 def _extract_class_count_from_output_details(output_details: Sequence[dict]) -> int:
@@ -155,7 +178,7 @@ def _normalize_output_layout(
 
 
 def _ensure_runtime_deps() -> None:
-    global cv2, np, tf, yaml
+    global cv2, litert_interpreter, litert_load_delegate, np, yaml
     if cv2 is None:
         import cv2 as _cv2
 
@@ -164,10 +187,13 @@ def _ensure_runtime_deps() -> None:
         import numpy as _np
 
         np = _np
-    if tf is None:
-        import tensorflow as _tf
+    if litert_interpreter is None:
+        # Runtime change (TF -> LiteRT): was `import tensorflow as _tf`. Kept lazy so
+        # CLI help still works on hosts without the inference deps installed.
+        from ai_edge_litert.interpreter import Interpreter, load_delegate
 
-        tf = _tf
+        litert_interpreter = Interpreter
+        litert_load_delegate = load_delegate
     if yaml is None:
         import yaml as _yaml
 
@@ -483,7 +509,8 @@ class EndToEndInference:
 
         delegates = []
         if not args.no_qnn:
-            delegate = tf.lite.experimental.load_delegate(
+            # Runtime change (TF -> LiteRT): was tf.lite.experimental.load_delegate.
+            delegate = litert_load_delegate(
                 args.qnn_lib, options={"backend_type": args.backend}
             )
             delegates = [delegate]
@@ -491,7 +518,8 @@ class EndToEndInference:
         else:
             print("CPU only.")
 
-        self.interpreter = tf.lite.Interpreter(
+        # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+        self.interpreter = litert_interpreter(
             model_content=model_content, experimental_delegates=delegates
         )
         self.interpreter.allocate_tensors()
@@ -792,69 +820,6 @@ class EndToEndInference:
             print(f"avg_model_invoke_ms={avg_invoke_ms:.3f}")
 
 
-def run_script(
-    script_name: str,
-    default_flow: str,
-    default_conf_thres: float,
-    default_iou_thres: float,
-    default_topk: int,
-    default_max_det: int,
-) -> None:
-    parser = argparse.ArgumentParser(prog=script_name)
-    parser.add_argument("--model", required=True, help="Path to TFLite model")
-    parser.add_argument(
-        "--yaml",
-        default="/root/workspace/sanoop/coco.yaml",
-        help="YAML with class names",
-    )
-    parser.add_argument("--img-dir", default="./image")
-    parser.add_argument("--output-dir", default="./output")
-
-    parser.add_argument("--conf-thres", type=float, default=default_conf_thres)
-    parser.add_argument("--iou-thres", type=float, default=default_iou_thres)
-    parser.add_argument("--topk", type=int, default=default_topk)
-    parser.add_argument("--max-det", type=int, default=default_max_det)
-
-    parser.add_argument(
-        "--postprocess-flow", choices=["auto", "default", "o2o", "o2m"], default="auto"
-    )
-    parser.add_argument(
-        "--o2o-nms", action="store_true", help="If flow is o2o, enable class-wise NMS"
-    )
-    parser.add_argument(
-        "--disable-int8-prefilter",
-        action="store_true",
-        help=(
-            "Disable int8 class prefilter and use the baseline "
-            "full dequant+sigmoid class path."
-        ),
-    )
-
-    parser.add_argument("--no-qnn", action="store_true")
-    parser.add_argument("--qnn-lib", default="/usr/lib/libQnnTFLiteDelegate.so")
-    parser.add_argument("--backend", default="htp")
-
-    args = parser.parse_args()
-    run_inference(
-        model_path=args.model,
-        yaml_path=args.yaml,
-        img_dir=args.img_dir,
-        output_dir=args.output_dir,
-        model_type=None,
-        default_flow=default_flow,
-        conf_thres=args.conf_thres,
-        iou_thres=args.iou_thres,
-        topk=args.topk,
-        max_det=args.max_det,
-        postprocess_flow=args.postprocess_flow,
-        o2o_nms=args.o2o_nms,
-        disable_int8_prefilter=args.disable_int8_prefilter,
-        no_qnn=args.no_qnn,
-        qnn_lib=args.qnn_lib,
-        backend=args.backend,
-    )
-
-
 def collect_image_files(img_dir: str) -> list[Path]:
     image_dir = Path(img_dir)
     if not image_dir.is_dir():
@@ -880,14 +845,16 @@ def _validate_inference_inputs(model_path: str, yaml_path: str, img_dir: str) ->
 
 
 def _extract_box_channel_count(model_path: str) -> int:
-    interp = tf.lite.Interpreter(model_path=model_path)
+    # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+    interp = litert_interpreter(model_path=model_path)
     interp.allocate_tensors()
     box_od, _ = _resolve_raw_output_details(interp.get_output_details())
     return _extract_box_layout(box_od["shape"])[0]
 
 
 def _extract_class_count(model_path: str) -> int:
-    interp = tf.lite.Interpreter(model_path=model_path)
+    # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+    interp = litert_interpreter(model_path=model_path)
     interp.allocate_tensors()
     return _extract_class_count_from_output_details(interp.get_output_details())
 

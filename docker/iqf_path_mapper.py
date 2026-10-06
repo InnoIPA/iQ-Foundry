@@ -33,13 +33,18 @@ DEFAULT_DOCKERFILE = "docker/Dockerfile"
 DOCKER_CONFIG_RELATIVE_PATH = Path(".iqf") / "docker-paths.json"
 MODE_CHOICES = ("qc", "mAP", "test")
 MODEL_TYPES = ("yolov10", "yolov11", "yolov26")
-RUNTIME_CHOICES = ("litert", "onnx")
-PRECISION_CHOICES = ("fp32", "int8", "w8a16")
+RUNTIME_CHOICES = ("litert", "onnx", "qairt")
+PRECISION_CHOICES = ("fp32", "int8", "w8a16", "fp16")
 SUPPORTED_RUNTIME_PRECISION_ROWS = (
     ("litert", "int8", "Existing LiteRT/TFLite INT8 path"),
     ("litert", "fp32", "LiteRT/TFLite FP32 path"),
     ("onnx", "fp32", "ONNX Runtime FP32 path"),
     ("onnx", "w8a16", "ONNX Runtime W8A16 path"),
+    # QAIRT builds a pre-compiled HTP context binary offline. FP32 is absent because
+    # HTP has no FP32 math; a float graph runs as FP16 and only FP16 finalizes on v73.
+    ("qairt", "int8", "QAIRT HTP context binary W8A8 path"),
+    ("qairt", "w8a16", "QAIRT HTP context binary W8A16 path"),
+    ("qairt", "fp16", "QAIRT HTP context binary FP16 path"),
 )
 SUPPORTED_RUNTIME_PRECISION_COMBINATIONS = {
     (runtime, precision)
@@ -188,7 +193,7 @@ def _empty_config() -> dict:
 def _invalid_legacy_config_message(config_path: Path) -> str:
     return (
         f"[error] Saved wrapper config at {config_path} is incompatible with iQ-Foundry "
-        "v0.0.3. Re-run './docker/iqf configure <mode> --type <type> --runtime <runtime> "
+        "v1.0.0. Re-run './docker/iqf configure <mode> --type <type> --runtime <runtime> "
         "--precision <precision>' to recreate it."
     )
 
@@ -360,7 +365,10 @@ def _persisted_kind(mode: str, field_name: str) -> str:
 
 
 def qc_requires_calibration(runtime: str, precision: str) -> bool:
-    return not (runtime in {"litert", "onnx"} and precision == "fp32")
+    # Float precisions carry no calibration step: litert/onnx fp32 and qairt fp16.
+    if runtime in {"litert", "onnx"} and precision == "fp32":
+        return False
+    return not (runtime == "qairt" and precision == "fp16")
 
 
 def merge_required_input_paths(
@@ -943,14 +951,21 @@ def plan_run_command(
     needs_adb = mode == "mAP" or (mode == "test" and use_adb)
     if mode == "qc":
         qai_hub_ini = Path.home() / ".qai_hub" / "client.ini"
-        _runtime_check(qai_hub_ini, "QAI Hub config", dry_run, warnings, expected_kind="file")
-        mounts.append(MountSpec(str(qai_hub_ini.parent), "/root/.qai_hub", True))
+        # qairt converts offline with the vendored SDK and never calls AI Hub.
+        if runtime != "qairt":
+            _runtime_check(
+                qai_hub_ini, "QAI Hub config", dry_run, warnings, expected_kind="file"
+            )
+        if runtime != "qairt" or qai_hub_ini.parent.is_dir():
+            mounts.append(MountSpec(str(qai_hub_ini.parent), "/root/.qai_hub", True))
 
+    host_pre_command = None
     if needs_adb:
         _append_adb_runtime_mounts(mounts, dry_run, warnings)
-        host_pre_command = None
-    else:
-        host_pre_command = None
+        # The container's adb server cannot claim the USB device while a host-side
+        # server holds it, and the in-container kill-server cannot reach the host's.
+        if shutil.which("adb"):
+            host_pre_command = ["sh", "-c", "adb kill-server >/dev/null 2>&1 || true"]
 
     inner_command = build_inner_cli_command(
         mode=mode,

@@ -50,6 +50,32 @@ except ModuleNotFoundError:
         resolve_onnx_model_artifact,
     )
 
+try:
+    from tool.inference_tflite import (
+        EXPECTED_BOX_CHANNELS,
+        _select_box_and_class_outputs,
+    )
+except ModuleNotFoundError:
+    from inference_tflite import (
+        EXPECTED_BOX_CHANNELS,
+        _select_box_and_class_outputs,
+    )
+
+try:
+    from tool.qairt_inference import (
+        ADBQAIRTRawModel,
+        QAIRTRawModel,
+        load_qairt_model_metadata,
+        prepare_shared_qairt_inputs,
+    )
+except ModuleNotFoundError:
+    from qairt_inference import (
+        ADBQAIRTRawModel,
+        QAIRTRawModel,
+        load_qairt_model_metadata,
+        prepare_shared_qairt_inputs,
+    )
+
 DEFAULT_REMOTE_RUNNER_LOCAL = str(
     Path(__file__).resolve().parent / "remote_tflite_raw_runner.py"
 )
@@ -611,119 +637,53 @@ def prepare_shared_int8_inputs(
 def _find_boxes_scores(
     outputs: list[np.ndarray], details: list[dict]
 ) -> tuple[np.ndarray, np.ndarray]:
-    box_candidates: list[tuple[np.ndarray, int]] = []
-    cls_candidates: list[np.ndarray] = []
-    for arr, det in zip(outputs, details, strict=True):
-        x = maybe_dequant(arr, det)
-        shp = tuple(int(v) for v in x.shape)
-        if len(shp) != 3 or shp[0] != 1:
-            continue
-
-        if shp[1] in (4, 64):
-            box_candidates.append((x, 2))
-        elif shp[2] in (4, 64):
-            box_candidates.append((x, 1))
-        else:
-            cls_candidates.append(x)
-
-    if len(box_candidates) != 1:
-        shapes = [tuple(o.shape) for o in outputs]
-        raise RuntimeError(
-            f"Could not uniquely identify raw box tensor. Shapes={shapes}"
-        )
-
-    boxes, anchor_axis = box_candidates[0]
-    anchor_count = int(boxes.shape[anchor_axis])
-    matching_cls = [
-        s
-        for s in cls_candidates
-        if int(s.shape[1]) == anchor_count or int(s.shape[2]) == anchor_count
-    ]
-    if not matching_cls:
+    selected = _select_box_and_class_outputs(
+        [(det.get("name"), arr.shape) for arr, det in zip(outputs, details, strict=True)]
+    )
+    if selected is None:
         shapes = [tuple(o.shape) for o in outputs]
         raise RuntimeError(
             f"Could not locate raw boxes/scores tensors. Shapes={shapes}"
         )
-
-    def class_dim(arr: np.ndarray) -> int:
-        if int(arr.shape[1]) == anchor_count:
-            return int(arr.shape[2])
-        return int(arr.shape[1])
-
-    scores = sorted(matching_cls, key=class_dim, reverse=True)[0]
-    return boxes, scores
+    box_idx, cls_idx = selected
+    return (
+        maybe_dequant(outputs[box_idx], details[box_idx]),
+        maybe_dequant(outputs[cls_idx], details[cls_idx]),
+    )
 
 
-def _extract_box_layout(shape: tuple[int, ...]) -> tuple[int, int] | None:
-    if len(shape) != 3 or int(shape[0]) != 1:
-        return None
-    if int(shape[1]) in (4, 64):
-        return int(shape[1]), int(shape[2])
-    if int(shape[2]) in (4, 64):
-        return int(shape[2]), int(shape[1])
-    return None
+def _litert_interpreter_cls():
+    """Return the LiteRT Interpreter class.
+
+    Runtime change (TF -> LiteRT): this replaces the former
+    `tflite_runtime -> tensorflow.lite.python.interpreter` fallback chain that was
+    duplicated at three call sites. ai-edge-litert exposes the same Interpreter API.
+    Imported lazily so CLI help still works without the host inference deps installed.
+    """
+    from ai_edge_litert.interpreter import Interpreter
+
+    return Interpreter
 
 
-def _class_dim_for_anchor_count(
-    shape: tuple[int, ...], anchor_count: int
-) -> int | None:
-    if len(shape) != 3 or int(shape[0]) != 1:
-        return None
-    if int(shape[2]) == anchor_count:
-        return int(shape[1])
-    if int(shape[1]) == anchor_count:
-        return int(shape[2])
-    return None
-
-
-def _extract_tflite_class_count(model_path: Path) -> int:
-    try:
-        from tflite_runtime.interpreter import Interpreter
-    except Exception:
-        from tensorflow.lite.python.interpreter import Interpreter
+def _extract_tflite_class_count(
+    model_path: Path, expected_box_channels: int | None = None
+) -> int:
+    Interpreter = _litert_interpreter_cls()
 
     interp = Interpreter(model_path=str(model_path))
     interp.allocate_tensors()
     output_details = interp.get_output_details()
-
-    box_candidates = []
-    cls_candidates = []
-    for detail in output_details:
-        shape = tuple(int(v) for v in detail["shape"])
-        box_layout = _extract_box_layout(shape)
-        if box_layout is not None:
-            _, anchor_count = box_layout
-            if anchor_count == 8400:
-                box_candidates.append(detail)
-            continue
-        cls_dim = _class_dim_for_anchor_count(shape, anchor_count=8400)
-        if cls_dim is not None:
-            cls_candidates.append((detail, cls_dim))
-
-    if len(box_candidates) != 1:
+    selected = _select_box_and_class_outputs(
+        [(d.get("name"), d["shape"]) for d in output_details],
+        expected_box_channels=expected_box_channels,
+    )
+    if selected is None:
         raise RuntimeError(
-            "Could not uniquely identify TFLite box output for class-count validation. "
+            "Could not identify TFLite box/class outputs for class-count validation. "
             f"Shapes={[tuple(int(v) for v in d['shape']) for d in output_details]}"
         )
-
-    anchor_count = _extract_box_layout(
-        tuple(int(v) for v in box_candidates[0]["shape"])
-    )[1]
-    matching_cls = [
-        cls_dim
-        for detail, cls_dim in cls_candidates
-        if _class_dim_for_anchor_count(
-            tuple(int(v) for v in detail["shape"]), anchor_count
-        )
-        is not None
-    ]
-    if not matching_cls:
-        raise RuntimeError(
-            "Could not identify TFLite class output for class-count validation. "
-            f"Shapes={[tuple(int(v) for v in d['shape']) for d in output_details]}"
-        )
-
-    return int(max(matching_cls))
+    shape = [int(v) for v in output_details[selected[1]]["shape"]]
+    return shape[1] if shape[2] == 8400 else shape[2]
 
 
 def normalize_raw_pair(
@@ -978,10 +938,7 @@ class PTRawModel:
 
 class TFLiteRawModel:
     def __init__(self, model_path: str):
-        try:
-            from tflite_runtime.interpreter import Interpreter
-        except Exception:
-            from tensorflow.lite.python.interpreter import Interpreter
+        Interpreter = _litert_interpreter_cls()
         self.interp = Interpreter(model_path=model_path)
         self.interp.allocate_tensors()
         self.input_detail = self.interp.get_input_details()[0]
@@ -1242,9 +1199,18 @@ def validate_eval_class_count_compatibility(
 ) -> None:
     fp_class_count = len(reference_class_names)
     if runtime == "litert":
-        candidate_class_count = _extract_tflite_class_count(converted_model_path)
+        candidate_class_count = _extract_tflite_class_count(
+            converted_model_path,
+            expected_box_channels=EXPECTED_BOX_CHANNELS.get(model_type),
+        )
     elif runtime == "onnx":
         candidate_class_count = load_onnx_model_metadata(
+            str(converted_model_path),
+            model_type=model_type,
+            precision=precision,
+        ).class_count
+    elif runtime == "qairt":
+        candidate_class_count = load_qairt_model_metadata(
             str(converted_model_path),
             model_type=model_type,
             precision=precision,
@@ -1257,6 +1223,36 @@ def validate_eval_class_count_compatibility(
             f"reference model defines {fp_class_count} classes, "
             f"but converted model outputs {candidate_class_count}."
         )
+
+
+def _build_qairt_runner(cfg: dict, args, shared_candidate_inputs=None):
+    """QAIRT runner: batched over adb, or local when already on the target."""
+    if not args.candidate_on_device:
+        return QAIRTRawModel(
+            model_path=cfg["path"],
+            model_type=cfg["model_type"],
+            precision=cfg["quant"],
+            qnn_lib=args.qnn_lib,
+            backend=args.backend,
+            no_qnn=args.no_qnn,
+        )
+    if shared_candidate_inputs is None:
+        raise RuntimeError(
+            "shared candidate inputs are required for on-device QAIRT mode"
+        )
+    print(f"{cfg['quant']} QAIRT inference mode: IQ9 via adb")
+    return ADBQAIRTRawModel(
+        model_path=cfg["path"],
+        model_type=cfg["model_type"],
+        precision=cfg["quant"],
+        adb_serial=args.adb_serial,
+        remote_workdir=args.remote_workdir,
+        qnn_lib=args.qnn_lib,
+        backend=args.backend,
+        no_qnn=args.no_qnn,
+        shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
+        shared_meta=shared_candidate_inputs["meta"],
+    )
 
 
 def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
@@ -1283,6 +1279,9 @@ def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
                 shared_meta=shared_candidate_inputs["meta"],
             )
         return TFLiteRawModel(cfg["path"])
+
+    if cfg["backend"] == "qairt":
+        return _build_qairt_runner(cfg, args, shared_candidate_inputs)
 
     if cfg["backend"] == "onnx":
         if args.candidate_on_device:
@@ -1348,7 +1347,7 @@ def evaluate_one_model(
     all_preds = []
     skipped_unmapped_predictions = 0
 
-    is_adb_batch = isinstance(runner, (ADBTFLiteRawModel, ADBORTRawModel))
+    is_adb_batch = hasattr(runner, "prepare_batch")
     print(_format_run_location(model_key, cfg, is_adb_batch))
 
     if is_adb_batch:
@@ -1592,7 +1591,7 @@ def _build_model_cfgs(
         "path": str(reference_model_path),
     }
     candidate_cfg = {
-        "backend": "tflite" if runtime == "litert" else "onnx",
+        "backend": {"litert": "tflite", "qairt": "qairt"}.get(runtime, "onnx"),
         "family": family,
         "head": "default",
         "model_type": model_type,
@@ -1604,10 +1603,7 @@ def _build_model_cfgs(
 
 
 def _load_tflite_input_detail(int_model_path: Path) -> dict:
-    try:
-        from tflite_runtime.interpreter import Interpreter
-    except Exception:
-        from tensorflow.lite.python.interpreter import Interpreter
+    Interpreter = _litert_interpreter_cls()
 
     interp = Interpreter(model_path=str(int_model_path))
     interp.allocate_tensors()
@@ -1681,13 +1677,17 @@ def run_pair_map_eval(
     local_target_requirements = str(
         Path(__file__).resolve().parent.parent / "requirements" / "target.txt"
     )
-    remote_python = ensure_adb_runtime_venv(
-        adb_serial=adb_serial,
-        local_requirements_path=local_target_requirements,
-        local_ort_qnn_wheel_path=(
-            DEFAULT_ORT_QNN_WHEEL if runtime == "onnx" else None
-        ),
-    )
+    # QAIRT runs the target's own qnn-net-run, so no device venv is provisioned.
+    if runtime == "qairt":
+        remote_python = None
+    else:
+        remote_python = ensure_adb_runtime_venv(
+            adb_serial=adb_serial,
+            local_requirements_path=local_target_requirements,
+            local_ort_qnn_wheel_path=(
+                DEFAULT_ORT_QNN_WHEEL if runtime == "onnx" else None
+            ),
+        )
     remote_layout = make_map_remote_run_layout(
         remote_workdir=remote_workdir,
         converted_model_path=effective_converted_model_path,
@@ -1763,6 +1763,19 @@ def run_pair_map_eval(
                 adb_serial=adb_serial,
                 remote_input_dir=remote_layout["remote_input_dir"],
                 artifact=onnx_candidate_artifact,
+            )
+            shared_candidate_inputs = {
+                "meta": shared_meta,
+                "remote_input_dir": remote_layout["remote_input_dir"],
+            }
+        elif runtime == "qairt":
+            shared_inputs_obj, shared_meta, _, _ = prepare_shared_qairt_inputs(
+                images=imgs,
+                model_path=str(effective_converted_model_path),
+                model_type=model_type,
+                precision=precision,
+                adb_serial=adb_serial,
+                remote_input_dir=remote_layout["remote_input_dir"],
             )
             shared_candidate_inputs = {
                 "meta": shared_meta,
@@ -1855,6 +1868,3 @@ def run_pair_map_eval(
         "output_text": str(output_path),
     }
 
-
-def run_fp_int_pair_map_eval(*args, **kwargs):
-    return run_pair_map_eval(*args, **kwargs)

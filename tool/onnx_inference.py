@@ -22,7 +22,6 @@ import platform
 import shlex
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import zipfile
@@ -41,16 +40,20 @@ IMG_H = 640
 REG_MAX = 16
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 IQ9_ARCH_ALIASES = {"aarch64", "arm64"}
+# Runtime change (ORT cp312 -> cp314): QLI2.0 ships Python 3.14, so the previous
+# cp312 wheel could not be installed on target at all. This is the only place the
+# bundled wheel filename appears; both ADB call sites read this constant.
 DEFAULT_ORT_QNN_WHEEL = str(
     Path(__file__).resolve().parent.parent
     / "wheels"
-    / "onnxruntime_qnn-1.23.0-cp312-cp312-linux_aarch64.whl"
+    / "onnxruntime_qnn-1.25.1-cp314-cp314-linux_aarch64.whl"
 )
 EXPECTED_BOX_MODES = {
     "yolov10": "dfl64",
     "yolov11": "dfl64",
     "yolov26": "ltrb4",
 }
+BOX_MODE_CHANNELS = {"dfl64": 64, "ltrb4": 4}
 DEFAULT_TFLITE_QNN_LIB = "/usr/lib/libQnnTFLiteDelegate.so"
 DEFAULT_ORT_QNN_BACKEND_PATH = "libQnnHtp.so"
 
@@ -459,6 +462,49 @@ def _class_dim_for_anchor_count(shape: Sequence[int], anchor_count: int) -> int 
     return None
 
 
+def _output_order_key(name: str | None, position: int) -> tuple[int, int]:
+    """Graph output order; converted models name their outputs output_0, output_1."""
+    if name and name.startswith("output_") and name[len("output_") :].isdigit():
+        return int(name[len("output_") :]), position
+    return position, position
+
+
+def _select_box_and_class_outputs(
+    outputs: Sequence[tuple[str | None, Sequence[int]]],
+    expected_box_channels: int | None = None,
+    anchor_count: int = 8400,
+) -> tuple[int, int] | None:
+    """Return (box_index, class_index) into `outputs`, or None.
+
+    A class tensor with 4 or 64 classes has the same shape as a box tensor, so
+    shape alone cannot tell them apart. Candidates are narrowed by the box
+    channel count expected for --type (when known), and any remaining tie is
+    broken by output order: every iQ-Foundry export returns (boxes, scores).
+    """
+    channels: dict[int, int] = {}
+    for idx, (_, shape) in enumerate(outputs):
+        shp = tuple(int(x) for x in shape)
+        if len(shp) != 3 or shp[0] != 1:
+            continue
+        if shp[2] == anchor_count:
+            channels[idx] = shp[1]
+        elif shp[1] == anchor_count:
+            channels[idx] = shp[2]
+    box_candidates = [idx for idx, ch in channels.items() if ch == expected_box_channels]
+    if not box_candidates:
+        # Unknown --type, or a model of another family: keep the shape rule so the
+        # caller's --type mismatch check can still report it clearly.
+        box_candidates = [idx for idx, ch in channels.items() if ch in (4, 64)]
+    if not box_candidates:
+        return None
+    order = {idx: _output_order_key(outputs[idx][0], idx) for idx in channels}
+    box_idx = min(box_candidates, key=order.__getitem__)
+    cls_candidates = [idx for idx in channels if idx != box_idx]
+    if not cls_candidates:
+        return None
+    return box_idx, min(cls_candidates, key=order.__getitem__)
+
+
 def _normalize_output_layout(
     tensor,
     *,
@@ -584,23 +630,61 @@ def _validate_class_name_count(meta: ORTModelMeta, yaml_path: str) -> None:
         )
 
 
-def _onnx_bundle_uses_external_data(model_path: Path) -> bool:
+def _iter_graph_tensors(graph):
+    """Every TensorProto in a graph, including node attributes and subgraphs."""
+    yield from graph.initializer
+    for sparse in graph.sparse_initializer:
+        yield sparse.values
+        yield sparse.indices
+    for node in graph.node:
+        for attr in node.attribute:
+            if attr.HasField("t"):
+                yield attr.t
+            yield from attr.tensors
+            if attr.HasField("g"):
+                yield from _iter_graph_tensors(attr.g)
+            for subgraph in attr.graphs:
+                yield from _iter_graph_tensors(subgraph)
+
+
+def _external_data_locations(model_path: Path) -> list[str]:
     _ensure_onnx()
     model = onnx.load(str(model_path), load_external_data=False)
-    external_location = getattr(onnx.TensorProto, "EXTERNAL", 1)
-    for initializer in model.graph.initializer:
-        if int(getattr(initializer, "data_location", 0)) == int(external_location):
-            return True
-        if getattr(initializer, "external_data", None):
-            return True
-    return False
+    locations = set()
+    for tensor in _iter_graph_tensors(model.graph):
+        if tensor.data_location != onnx.TensorProto.EXTERNAL:
+            continue
+        for entry in tensor.external_data:
+            if entry.key == "location":
+                locations.add(entry.value)
+    return sorted(locations)
 
 
 def collect_model_sidecars(model_path: str) -> list[Path]:
+    """External-data files the model references, to be shipped alongside it.
+
+    qc names the sidecar `<model stem>.data`; older artifacts and AI Hub bundles
+    use `model.data`. The graph is read when `onnx` is importable (host). On the
+    target, where `onnx` is not installed, the known names are probed instead.
+    """
     model = Path(model_path).expanduser().resolve()
+    try:
+        locations = _external_data_locations(model)
+    except RuntimeError:
+        for name in (f"{model.stem}.data", "model.data"):
+            candidate = model.with_name(name)
+            if candidate.is_file():
+                return [candidate]
+        return []
+
     sidecars: list[Path] = []
-    candidate = model.with_name("model.data")
-    if candidate.is_file():
+    for location in locations:
+        candidate = model.parent / location
+        if not candidate.is_file():
+            raise RuntimeError(
+                f"ONNX model {model} references external tensor data "
+                f"'{location}', but {candidate} is missing."
+            )
         sidecars.append(candidate)
     return sidecars
 
@@ -642,15 +726,7 @@ def resolve_onnx_model_artifact(model_path: str) -> ResolvedONNXArtifact:
             )
 
         resolved_model = model_members[0].resolve()
-        resolved_sidecars: list[Path] = []
-        data_member = resolved_model.with_name("model.data")
-        if data_member.is_file():
-            resolved_sidecars.append(data_member)
-        elif _onnx_bundle_uses_external_data(resolved_model):
-            raise RuntimeError(
-                f"ONNX bundle {requested} contains model.onnx that references external "
-                "tensor data, but model.data is missing."
-            )
+        resolved_sidecars = collect_model_sidecars(str(resolved_model))
 
         print(
             f"[warn] ONNX bundle input detected: {requested}. "
@@ -693,28 +769,19 @@ def load_onnx_model_metadata(
     input_layout = _resolve_input_layout(input_meta.shape)
     input_dtype = ort_type_to_numpy_dtype(input_meta.type)
 
-    box_meta = None
-    class_meta = None
-    box_mode = None
-    class_count = None
-    for output_meta in outputs:
-        shape = tuple(int(v) for v in output_meta.shape)
-        box_layout = _extract_box_layout(shape)
-        if box_layout is not None and box_layout[1] == 8400:
-            box_meta = output_meta
-            box_mode = "dfl64" if box_layout[0] == 64 else "ltrb4"
-            continue
-
-        cls_dim = _class_dim_for_anchor_count(shape, anchor_count=8400)
-        if cls_dim is not None:
-            class_meta = output_meta
-            class_count = int(cls_dim)
-
-    if box_meta is None or class_meta is None or box_mode is None or class_count is None:
+    selected = _select_box_and_class_outputs(
+        [(o.name, o.shape) for o in outputs],
+        expected_box_channels=BOX_MODE_CHANNELS.get(EXPECTED_BOX_MODES.get(model_type)),
+    )
+    if selected is None:
         raise RuntimeError(
             "Could not identify raw ONNX box/class outputs. "
             f"Outputs were: {[(o.name, tuple(int(v) for v in o.shape), o.type) for o in outputs]}"
         )
+    box_meta = outputs[selected[0]]
+    class_meta = outputs[selected[1]]
+    box_mode = "dfl64" if _extract_box_layout(box_meta.shape)[0] == 64 else "ltrb4"
+    class_count = int(_class_dim_for_anchor_count(class_meta.shape, anchor_count=8400))
 
     resolved_box_quant = box_quant
     resolved_class_quant = class_quant
@@ -1061,6 +1128,26 @@ def _prepare_image_input(
     return tmp_obj.name, tmp_obj
 
 
+def _accumulate_timing(runner, span_s, total_time_s, invoke_time_s):
+    """Fold one image's timing in.
+
+    Batched runners fetch results before the loop, so their device time is not
+    inside the measured span and is added back here.
+    """
+    invoke_s = runner.last_invoke_time_s
+    if not getattr(runner, "device_time_included", True):
+        span_s += invoke_s or 0.0
+    if invoke_s is None or invoke_time_s is None:
+        return total_time_s + span_s, None
+    return total_time_s + span_s, invoke_time_s + invoke_s
+
+
+def _format_invoke_ms(invoke_time_s, processed: int) -> str:
+    if invoke_time_s is None:
+        return "n/a"
+    return f"{(invoke_time_s / processed) * 1000.0:.3f}"
+
+
 def _run_test_directory(
     *,
     runner: "ORTRawModel",
@@ -1133,15 +1220,16 @@ def _run_test_directory(
             )
             t1 = time.perf_counter()
             processed += 1
-            total_time_s += t1 - t0
-            invoke_time_s += runner.last_invoke_time_s
+            total_time_s, invoke_time_s = _accumulate_timing(
+                runner, t1 - t0, total_time_s, invoke_time_s
+            )
             print(f"{image_file.name}: flow={flow} preNMS={pre_nms} kept={written}")
 
         if processed > 0:
             print("=== Inference Timing Summary ===")
             print(f"processed={processed}")
             print(f"avg_total_inference_ms={(total_time_s / processed) * 1000.0:.3f}")
-            print(f"avg_model_invoke_ms={(invoke_time_s / processed) * 1000.0:.3f}")
+            print(f"avg_model_invoke_ms={_format_invoke_ms(invoke_time_s, processed)}")
 
         if not _has_meaningful_outputs(staging_output_dir):
             raise RuntimeError(

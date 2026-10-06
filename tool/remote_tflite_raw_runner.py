@@ -18,7 +18,11 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import tensorflow as tf
+
+# Runtime change (TF -> LiteRT): ai-edge-litert replaces tensorflow as the LiteRT
+# interpreter. It exposes Interpreter/load_delegate with the same signatures as
+# tf.lite.Interpreter / tf.lite.experimental.load_delegate.
+from ai_edge_litert.interpreter import Interpreter, load_delegate
 
 
 def dequant(arr: np.ndarray, scale: float, zp: int) -> np.ndarray:
@@ -27,50 +31,49 @@ def dequant(arr: np.ndarray, scale: float, zp: int) -> np.ndarray:
     return arr.astype(np.float32)
 
 
-def find_boxes_scores(output_details):
-    box_candidates = []
-    cls_candidates = []
+def _output_order_key(name, position):
+    """Graph output order; converted models name their outputs output_0, output_1."""
+    if name and name.startswith("output_") and name[len("output_") :].isdigit():
+        return int(name[len("output_") :]), position
+    return position, position
 
-    for od in output_details:
+
+def find_boxes_scores(output_details, anchor_count=8400):
+    """Pick the (box, class) outputs.
+
+    A class tensor with 4 or 64 classes has the same shape as a box tensor, so
+    shape alone cannot tell them apart; ties are broken by output order, since
+    every iQ-Foundry export returns (boxes, scores).
+    """
+    channels = {}
+    for idx, od in enumerate(output_details):
         shp = tuple(int(v) for v in od["shape"])
         if len(shp) != 3 or shp[0] != 1:
             continue
-        if shp[1] in (4, 64):
-            box_candidates.append((od, 2))
-        elif shp[2] in (4, 64):
-            box_candidates.append((od, 1))
-        else:
-            cls_candidates.append(od)
+        if shp[2] == anchor_count:
+            channels[idx] = shp[1]
+        elif shp[1] == anchor_count:
+            channels[idx] = shp[2]
 
-    if len(box_candidates) != 1:
+    order = {
+        idx: _output_order_key(output_details[idx].get("name"), idx) for idx in channels
+    }
+    box_candidates = [idx for idx, ch in channels.items() if ch in (4, 64)]
+    if not box_candidates:
         raise RuntimeError(
-            f"Expected exactly one raw box output [1,4/64,N], "
+            f"Expected a raw box output [1,4/64,{anchor_count}], "
             f"got {[tuple(od['shape']) for od in output_details]}"
         )
-    out_box, anchor_axis = box_candidates[0]
-    anchor_count = int(out_box["shape"][anchor_axis])
-    matching_cls = [
-        od
-        for od in cls_candidates
-        if int(od["shape"][1]) == anchor_count or int(od["shape"][2]) == anchor_count
-    ]
-    if not matching_cls:
+    box_idx = min(box_candidates, key=order.__getitem__)
+    cls_candidates = [idx for idx in channels if idx != box_idx]
+    if not cls_candidates:
         raise RuntimeError(
             "Expected class output [1,C,N] or [1,N,C] with the same anchor "
             "dimension as box output, "
             f"got {[tuple(od['shape']) for od in output_details]}"
         )
-    out_cls = sorted(
-        matching_cls,
-        key=lambda od: (
-            int(od["shape"][2])
-            if int(od["shape"][1]) == anchor_count
-            else int(od["shape"][1])
-        ),
-        reverse=True,
-    )[0]
-
-    return out_box, out_cls
+    cls_idx = min(cls_candidates, key=order.__getitem__)
+    return output_details[box_idx], output_details[cls_idx]
 
 
 def main():
@@ -92,13 +95,15 @@ def main():
 
     delegates = []
     if not args.no_qnn:
-        delegate = tf.lite.experimental.load_delegate(
+        # Runtime change (TF -> LiteRT): was tf.lite.experimental.load_delegate.
+        delegate = load_delegate(
             args.qnn_lib,
             options={"backend_type": args.backend},
         )
         delegates = [delegate]
 
-    interpreter = tf.lite.Interpreter(
+    # Runtime change (TF -> LiteRT): was tf.lite.Interpreter.
+    interpreter = Interpreter(
         model_content=model_content,
         experimental_delegates=delegates,
     )

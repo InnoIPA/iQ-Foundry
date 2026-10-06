@@ -15,24 +15,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 import tempfile
-import zipfile
-
-try:
-    import numpy as np
-except Exception:
-    np = None
 
 try:
     import torch
 except Exception:
     torch = None
-
-try:
-    from PIL import Image
-except Exception:
-    Image = None
 
 try:
     from ultralytics import YOLO
@@ -44,6 +32,17 @@ try:
 except Exception:
     hub = None
 
+from yolo_models.common import (
+    QAIRT_CALIBRATION_METHODS,
+    build_qairt_context_binary,
+    export_traced_model_to_onnx,
+    finalize_downloaded_onnx_artifact,
+    load_calibration_images,
+    require_qc_deps,
+    run_qairt_tool,
+    write_qairt_calibration_inputs,
+)
+
 
 YOLOV11_TEST_DEFAULTS = {
     "default_flow": "default",
@@ -54,23 +53,8 @@ YOLOV11_TEST_DEFAULTS = {
 }
 
 
-def _require_qc_deps() -> None:
-    missing = []
-    if np is None:
-        missing.append("numpy")
-    if torch is None:
-        missing.append("torch")
-    if Image is None:
-        missing.append("Pillow")
-    if YOLO is None:
-        missing.append("ultralytics")
-    if hub is None:
-        missing.append("qai_hub")
-    if missing:
-        raise RuntimeError(
-            "Missing QC dependencies for yolov11 quantize_convert: "
-            + ", ".join(missing)
-        )
+def _require_qc_deps(need_hub: bool = True) -> None:
+    require_qc_deps("yolov11", need_hub=need_hub)
 
 
 _TORCH_BASE = torch.nn.Module if torch is not None else object
@@ -138,79 +122,6 @@ class Yolo11BoxesScoresWrapper(_TORCH_BASE):
 
 
 # ----------------------------
-# Calibration loader
-# ----------------------------
-def load_calibration_images(
-    images_dir: str, input_hw: int, max_images: int = 200
-) -> list[np.ndarray]:
-    """
-    Loads up to max_images from images_dir and returns NHWC float32 arrays in [0,1]:
-      each element: [1,H,W,3]
-    """
-    _require_qc_deps()
-    if not os.path.isdir(images_dir):
-        raise RuntimeError(f"Calibration dir not found: {images_dir}")
-    assert np is not None and Image is not None
-
-    sample_inputs: list[np.ndarray] = []
-
-    for name in sorted(os.listdir(images_dir)):
-        if len(sample_inputs) >= max_images:
-            break
-
-        p = os.path.join(images_dir, name)
-        if not os.path.isfile(p):
-            continue
-
-        try:
-            im = Image.open(p).convert("RGB").resize((input_hw, input_hw))
-        except Exception:
-            continue
-
-        arr = (np.array(im).astype(np.float32) / 255.0)[None, ...]  # [1,H,W,3]
-        sample_inputs.append(arr)
-
-    if not sample_inputs:
-        raise RuntimeError(f"No calibration images loaded from: {images_dir}")
-
-    return sample_inputs
-
-
-def _finalize_downloaded_onnx_artifact(
-    downloaded_path: str | None,
-    requested_output_path: str,
-) -> str:
-    requested = Path(requested_output_path).expanduser().resolve()
-    candidate = Path(downloaded_path).expanduser().resolve() if downloaded_path else requested
-    requested.parent.mkdir(parents=True, exist_ok=True)
-
-    if zipfile.is_zipfile(candidate):
-        with tempfile.TemporaryDirectory(prefix="yolov11_onnx_artifact_") as tmpdir:
-            tmp_root = Path(tmpdir)
-            with zipfile.ZipFile(candidate) as zf:
-                zf.extractall(tmp_root)
-
-            extracted_model = next(tmp_root.rglob("model.onnx"), None)
-            if extracted_model is None:
-                raise RuntimeError(
-                    "Downloaded ONNX bundle does not contain model.onnx"
-                )
-
-            shutil.copy2(extracted_model, requested)
-            extracted_data = extracted_model.with_name("model.data")
-            if extracted_data.is_file():
-                shutil.copy2(extracted_data, requested.with_name("model.data"))
-        return str(requested)
-
-    if candidate != requested:
-        shutil.copy2(candidate, requested)
-        candidate_data = candidate.with_name("model.data")
-        if candidate_data.is_file():
-            shutil.copy2(candidate_data, requested.with_name("model.data"))
-    return str(requested)
-
-
-# ----------------------------
 # Pipeline
 # ----------------------------
 class YoloV11Pipeline:
@@ -256,10 +167,21 @@ class YoloV11Pipeline:
                 qc_quant_scheme=qc_quant_scheme,
             )
             return
+        if runtime == "qairt":
+            self.export_qairt(
+                model_path=model_path,
+                output_path=output_path,
+                precision=precision,
+                calib_dir=calib_dir,
+                max_calib=max_calib,
+                qc_head=qc_head,
+                qc_quant_scheme=qc_quant_scheme,
+            )
+            return
         raise ValueError(f"Unsupported runtime/precision: {runtime}/{precision}")
 
     def _build_traced_model(self, model_path: str):
-        _require_qc_deps()
+        _require_qc_deps(need_hub=False)
         assert torch is not None and YOLO is not None
 
         input_hw = 640
@@ -272,6 +194,81 @@ class YoloV11Pipeline:
             torch_model, example, strict=False, check_trace=False
         )
         return pt_model, input_hw, input_shape
+
+    def export_qairt(
+        self,
+        model_path: str,
+        output_path: str,
+        precision: str,
+        calib_dir: str | None = None,
+        max_calib: int = 200,
+        qc_head: str = "one2many",
+        qc_quant_scheme: str = "mse",
+    ) -> None:
+        """Build an HTP context binary: ONNX -> DLC -> (quantize) -> .bin."""
+        _require_qc_deps(need_hub=False)
+        if precision not in ("int8", "w8a16", "fp16"):
+            raise ValueError(f"Unsupported QAIRT precision: {precision}")
+        _ = qc_head  # intentionally ignored for yolov11
+
+        pt_model, input_hw, input_shape = self._build_traced_model(model_path)
+
+        with tempfile.TemporaryDirectory(prefix="qairt_yolov11_") as work_dir:
+            onnx_path = os.path.join(work_dir, "model.onnx")
+            export_traced_model_to_onnx(pt_model, input_shape, onnx_path)
+
+            dlc_path = os.path.join(work_dir, "model.dlc")
+            convert_args = [
+                "qairt-converter",
+                "--input_network", onnx_path,
+                "--source_model_input_shape", "image", f"1,{input_hw},{input_hw},3",
+                "--source_model_input_layout", "image", "NHWC",
+                "--out_tensor_name", "boxes",
+                "--out_tensor_name", "scores",
+                "--target_backend", "HTP",
+                "--output_path", dlc_path,
+            ]
+            if precision == "fp16":
+                # HTP has no FP32 math; a float graph is built directly at FP16.
+                convert_args += ["--float_bitwidth", "16"]
+            run_qairt_tool(convert_args, "converter")
+
+            graph_dlc = dlc_path
+            if precision != "fp16":
+                if not calib_dir:
+                    raise ValueError(
+                        f"--calib_dir is required for qairt/{precision}"
+                    )
+                list_path = write_qairt_calibration_inputs(
+                    calib_dir, input_hw, max_calib, work_dir
+                )
+                graph_dlc = os.path.join(work_dir, "model_quantized.dlc")
+                method = QAIRT_CALIBRATION_METHODS.get(
+                    qc_quant_scheme, qc_quant_scheme
+                )
+                quant_args = [
+                    "qairt-quantizer",
+                    "--input_dlc", dlc_path,
+                    "--input_list", list_path,
+                    "--output_dlc", graph_dlc,
+                    "--act_bitwidth", "16" if precision == "w8a16" else "8",
+                    "--weights_bitwidth", "8",
+                    "--bias_bitwidth", "32",
+                    "--use_per_channel_quantization",
+                    "--act_quantizer_calibration", method,
+                    "--act_quantizer_schema", "asymmetric",
+                    "--param_quantizer_calibration", "min-max",
+                    "--param_quantizer_schema", "symmetric",
+                    "--target_backend", "HTP",
+                ]
+                if precision == "w8a16":
+                    # The attention MatMuls take two dynamic activations, so at
+                    # 16-bit they land on HTP's A16W16 path, which requires a
+                    # symmetric B input and otherwise fails to finalize.
+                    quant_args.append("--disable_dynamic_16_bit_weights")
+                run_qairt_tool(quant_args, "quantizer")
+
+            build_qairt_context_binary(graph_dlc, output_path, work_dir)
 
     def export_onnx_fp32(
         self,
@@ -290,7 +287,7 @@ class YoloV11Pipeline:
             options="--target_runtime onnx",
         )
         downloaded_path = compile_job.download_target_model(str(output_path))
-        final_path = _finalize_downloaded_onnx_artifact(downloaded_path, output_path)
+        final_path = finalize_downloaded_onnx_artifact(downloaded_path, output_path)
         print(f"[yolov11] wrote onnx: {final_path}")
 
     def export_tflite_fp32(
@@ -364,7 +361,7 @@ class YoloV11Pipeline:
             options="--target_runtime onnx --quantize_io",
         )
         downloaded_path = compile_quantized_job.download_target_model(str(output_path))
-        final_path = _finalize_downloaded_onnx_artifact(downloaded_path, output_path)
+        final_path = finalize_downloaded_onnx_artifact(downloaded_path, output_path)
         print(f"[yolov11] wrote onnx: {final_path}")
 
     def quantize_convert(
