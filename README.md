@@ -1,7 +1,12 @@
 # iQ-Foundry
 
 <br />
-<div align="center"><img width="30%" height="30%" src="./docs/Images/project-logo.png"></div>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/Images/iQ-badge-white-foundry.png">
+    <img src="docs/Images/iQ-badge-ink-foundry.png" alt="iQ-Foundry" width="160">
+  </picture>
+</p>
 <br />
 
 <h1 align="center"><em><strong>Simplify the Workflow, Accelerate Deployment.</strong></em></h1>
