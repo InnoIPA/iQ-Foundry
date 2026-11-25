@@ -27,9 +27,11 @@ from iqf_path_mapper import (
     MODEL_TYPES,
     PRECISION_CHOICES,
     RUNTIME_CHOICES,
-    SUPPORTED_RUNTIME_PRECISION_COMBINATIONS,
     SUPPORTED_RUNTIME_PRECISION_ROWS,
+    TASK_CHOICES,
+    UnsupportedRuntimePrecision,
     WrapperError,
+    check_command,
     default_repo_root,
     docker_config_path,
     format_command,
@@ -83,10 +85,17 @@ def print_boxed_summary(lines: list[str]) -> None:
     print(color_text(border, ANSI_GREEN))
 
 
-def next_run_command(mode: str, model_type: str, runtime: str, precision: str) -> str:
+def next_run_command(
+    mode: str,
+    model_type: str,
+    runtime: str,
+    precision: str,
+    task: str | None = None,
+) -> str:
+    task_flag = f"--task {task} " if task else ""
     command = (
         f"./docker/iqf run {mode} --type {model_type} "
-        f"--runtime {runtime} --precision {precision}"
+        f"{task_flag}--runtime {runtime} --precision {precision}"
     )
     # Test configure is primarily used for on-device runs, so the next-step hint includes the
     # common ADB flag while keeping the saved path contract unchanged.
@@ -96,11 +105,11 @@ def next_run_command(mode: str, model_type: str, runtime: str, precision: str) -
 
 
 def configure_ready_box_lines(
-    mode: str, model_type: str, runtime: str, precision: str
+    mode: str, model_type: str, runtime: str, precision: str, task: str | None = None
 ) -> list[str]:
     return [
         f"{mode} mode is ready for execution!",
-        f"Run: {next_run_command(mode, model_type, runtime, precision)}",
+        f"Run: {next_run_command(mode, model_type, runtime, precision, task)}",
     ]
 
 
@@ -109,13 +118,17 @@ def print_global_help() -> None:
     print("  ./docker/iqf build [--dry-run]")
     print("  ./docker/iqf shell [--dry-run] [--qai-hub] [--adb]")
     print(
-        "  ./docker/iqf configure <qc|mAP|test> --type <type> "
+        "  ./docker/iqf configure <qc|eval|test> --type <type> [--task <task>] "
         "--runtime <runtime> --precision <precision>"
     )
     print(
-        "  ./docker/iqf run <qc|mAP|test> --type <type> "
+        "  ./docker/iqf run <qc|eval|test> --type <type> [--task <task>] "
         "--runtime <runtime> --precision <precision> [known path flags] [backend flags...]"
     )
+    print()
+    print("Task:")
+    print(f"  --task {{{','.join(TASK_CHOICES)}}} is optional: a type that supports detect runs")
+    print("  detect by default, and a type with a single task runs that task.")
     print()
     print("Image override:")
     print("  Use IQF_DOCKER_IMAGE or place --image <docker-tag> before the command,")
@@ -280,9 +293,14 @@ def _preflight_runtime_precision_argv(argv: list[str]) -> None:
         )
 
 
-def _validate_runtime_precision(runtime: str, precision: str) -> None:
-    if (runtime, precision) not in SUPPORTED_RUNTIME_PRECISION_COMBINATIONS:
-        raise WrapperError(_unsupported_runtime_precision_message(runtime, precision))
+def _check_command(model_type: str, task: str | None, runtime: str, precision: str) -> str:
+    """Check --type / --task / --runtime / --precision together (rules: iqf_registry.py)."""
+    try:
+        return check_command(model_type, task, runtime, precision)
+    except UnsupportedRuntimePrecision as exc:
+        raise WrapperError(_unsupported_runtime_precision_message(runtime, precision)) from exc
+    except ValueError as exc:
+        raise WrapperError(f"[error] {exc}") from exc
 
 
 def execute_plan(plan, dry_run: bool) -> int:
@@ -325,6 +343,7 @@ def configure_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="./docker/iqf configure", allow_abbrev=False)
     parser.add_argument("mode", choices=MODE_CHOICES)
     parser.add_argument("--type", required=True, choices=MODEL_TYPES)
+    parser.add_argument("--task", choices=TASK_CHOICES, default=None)
     parser.add_argument("--runtime", required=True, choices=RUNTIME_CHOICES)
     parser.add_argument("--precision", required=True, choices=PRECISION_CHOICES)
     return parser
@@ -337,6 +356,7 @@ def run_parser(mode: str) -> argparse.ArgumentParser:
     )
     parser.add_argument("mode", choices=MODE_CHOICES)
     parser.add_argument("--type", required=True, choices=MODEL_TYPES)
+    parser.add_argument("--task", choices=TASK_CHOICES, default=None)
     parser.add_argument("--runtime", required=True, choices=RUNTIME_CHOICES)
     parser.add_argument("--precision", required=True, choices=PRECISION_CHOICES)
     parser.add_argument("--save", action="store_true")
@@ -352,6 +372,7 @@ def run_command_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="./docker/iqf run", allow_abbrev=False)
     parser.add_argument("mode", nargs="?", choices=MODE_CHOICES)
     parser.add_argument("--type")
+    parser.add_argument("--task")
     parser.add_argument("--runtime")
     parser.add_argument("--precision")
     parser.add_argument("--save", action="store_true")
@@ -427,7 +448,7 @@ def handle_configure(
     )
     _preflight_runtime_precision_argv(remaining)
     args = configure_parser().parse_args(remaining)
-    _validate_runtime_precision(args.runtime, args.precision)
+    task = _check_command(args.type, args.task, args.runtime, args.precision)
     repo_root = resolve_repo_root(repo_root_override)
     config_path = docker_config_path(repo_root)
     # The prompt text itself stays unchanged; only the wrapper-owned status lines are colorized.
@@ -437,6 +458,7 @@ def handle_configure(
         args.mode,
         args.runtime,
         args.precision,
+        task=task,
         info_printer=print_info,
         warning_printer=print_warning,
         error_printer=print_error,
@@ -448,6 +470,7 @@ def handle_configure(
         args.runtime,
         args.precision,
         saved_inputs,
+        task=task,
     )
     print_success(
         f"[ok] saved {args.mode} input paths for {args.type} in {config_path}"
@@ -463,6 +486,7 @@ def handle_configure(
             args.type,
             args.runtime,
             args.precision,
+            args.task,
         )
     )
     return 0
@@ -506,7 +530,7 @@ def handle_run(
     }
     repo_root = resolve_repo_root(repo_root_override)
     image_name = resolve_image_name(image_override)
-    _validate_runtime_precision(args.runtime, args.precision)
+    task = _check_command(args.type, args.task, args.runtime, args.precision)
 
     plan, saved_inputs = plan_run_command(
         repo_root=repo_root,
@@ -519,6 +543,8 @@ def handle_run(
         passthrough_args=passthrough,
         use_adb=getattr(args, "adb", False),
         dry_run=args.dry_run,
+        task=task,
+        explicit_task=args.task,
     )
 
     if args.save and args.dry_run:
@@ -531,6 +557,7 @@ def handle_run(
             args.runtime,
             args.precision,
             saved_inputs,
+            task=task,
         )
         print(
             f"[ok] saved {mode} input paths for {args.type} in "

@@ -25,8 +25,54 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Sequence
-from functools import lru_cache
 from pathlib import Path
+
+# Shared detection helpers live in tool/postprocess. Run from the repo they import as
+# tool.postprocess; pushed to the target as a standalone script they sit next to it.
+try:
+    from tool.postprocess.detect import (
+        IMG_H,
+        IMG_W,
+        _class_dim_for_anchor_count,
+        _extract_box_layout,
+        _normalize_output_layout,
+        _output_order_key,
+        _select_box_and_class_outputs,
+        _should_run_nms,
+        build_anchor_centers_8400,
+        clamp,
+        classwise_nms_xyxy,
+        dfl_to_xyxy_pixels,
+        letterbox_bgr,
+        ltrb_grid_to_xyxy_pixels,
+        sigmoid_clip,
+        sort_and_cap,
+    )
+    from tool.postprocess.pose import postprocess_pose, save_pose_outputs
+    from tool.postprocess.segment import postprocess_segment, save_segment_outputs
+    from tool.postprocess.specs import MODEL_SPECS, TASK_SPECS
+except ModuleNotFoundError:
+    from postprocess.detect import (
+        IMG_H,
+        IMG_W,
+        _class_dim_for_anchor_count,
+        _extract_box_layout,
+        _normalize_output_layout,
+        _output_order_key,
+        _select_box_and_class_outputs,
+        _should_run_nms,
+        build_anchor_centers_8400,
+        clamp,
+        classwise_nms_xyxy,
+        dfl_to_xyxy_pixels,
+        letterbox_bgr,
+        ltrb_grid_to_xyxy_pixels,
+        sigmoid_clip,
+        sort_and_cap,
+    )
+    from postprocess.pose import postprocess_pose, save_pose_outputs
+    from postprocess.segment import postprocess_segment, save_segment_outputs
+    from postprocess.specs import MODEL_SPECS, TASK_SPECS
 
 cv2 = None
 np = None
@@ -37,81 +83,9 @@ yaml = None
 litert_interpreter = None
 litert_load_delegate = None
 
-IMG_W = 640
-IMG_H = 640
-REG_MAX = 16
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 IQ9_ARCH_ALIASES = {"aarch64", "arm64"}
-EXPECTED_BOX_CHANNELS = {
-    "yolov10": 64,
-    "yolov11": 64,
-    "yolov26": 4,
-}
-
-
-def _extract_box_layout(shape: Sequence[int]) -> tuple[int, int] | None:
-    shp = tuple(int(x) for x in shape)
-    if len(shp) != 3 or shp[0] != 1:
-        return None
-    if shp[1] in (4, 64):
-        return int(shp[1]), int(shp[2])
-    if shp[2] in (4, 64):
-        return int(shp[2]), int(shp[1])
-    return None
-
-
-def _class_dim_for_anchor_count(shape: Sequence[int], anchor_count: int) -> int | None:
-    shp = tuple(int(x) for x in shape)
-    if len(shp) != 3 or shp[0] != 1:
-        return None
-    if int(shp[2]) == anchor_count:
-        return int(shp[1])
-    if int(shp[1]) == anchor_count:
-        return int(shp[2])
-    return None
-
-
-def _output_order_key(name: str | None, position: int) -> tuple[int, int]:
-    """Graph output order; converted models name their outputs output_0, output_1."""
-    if name and name.startswith("output_") and name[len("output_") :].isdigit():
-        return int(name[len("output_") :]), position
-    return position, position
-
-
-def _select_box_and_class_outputs(
-    outputs: Sequence[tuple[str | None, Sequence[int]]],
-    expected_box_channels: int | None = None,
-    anchor_count: int = 8400,
-) -> tuple[int, int] | None:
-    """Return (box_index, class_index) into `outputs`, or None.
-
-    A class tensor with 4 or 64 classes has the same shape as a box tensor, so
-    shape alone cannot tell them apart. Candidates are narrowed by the box
-    channel count expected for --type (when known), and any remaining tie is
-    broken by output order: every iQ-Foundry export returns (boxes, scores).
-    """
-    channels: dict[int, int] = {}
-    for idx, (_, shape) in enumerate(outputs):
-        shp = tuple(int(x) for x in shape)
-        if len(shp) != 3 or shp[0] != 1:
-            continue
-        if shp[2] == anchor_count:
-            channels[idx] = shp[1]
-        elif shp[1] == anchor_count:
-            channels[idx] = shp[2]
-    box_candidates = [idx for idx, ch in channels.items() if ch == expected_box_channels]
-    if not box_candidates:
-        # Unknown --type, or a model of another family: keep the shape rule so the
-        # caller's --type mismatch check can still report it clearly.
-        box_candidates = [idx for idx, ch in channels.items() if ch in (4, 64)]
-    if not box_candidates:
-        return None
-    order = {idx: _output_order_key(outputs[idx][0], idx) for idx in channels}
-    box_idx = min(box_candidates, key=order.__getitem__)
-    cls_candidates = [idx for idx in channels if idx != box_idx]
-    if not cls_candidates:
-        return None
-    return box_idx, min(cls_candidates, key=order.__getitem__)
+EXPECTED_BOX_CHANNELS = {name: spec.box_channels for name, spec in MODEL_SPECS.items()}
 
 
 def _resolve_raw_output_details(
@@ -144,39 +118,6 @@ def _extract_class_count_from_output_details(output_details: Sequence[dict]) -> 
     return int(class_count)
 
 
-def _normalize_output_layout(
-    tensor: np.ndarray,
-    *,
-    tensor_name: str,
-    channel_sizes: tuple[int, ...] | None = None,
-    anchor_count: int | None = None,
-) -> np.ndarray:
-    if tensor.ndim != 3 or int(tensor.shape[0]) != 1:
-        raise RuntimeError(
-            f"Unexpected {tensor_name} tensor rank/shape: "
-            f"{tuple(int(x) for x in tensor.shape)}"
-        )
-    if channel_sizes is not None:
-        if int(tensor.shape[1]) in channel_sizes:
-            return tensor
-        if int(tensor.shape[2]) in channel_sizes:
-            return np.transpose(tensor, (0, 2, 1))
-        raise RuntimeError(
-            f"Unexpected {tensor_name} tensor shape: "
-            f"{tuple(int(x) for x in tensor.shape)}"
-        )
-    if anchor_count is not None:
-        if int(tensor.shape[2]) == anchor_count:
-            return tensor
-        if int(tensor.shape[1]) == anchor_count:
-            return np.transpose(tensor, (0, 2, 1))
-        raise RuntimeError(
-            f"Unexpected {tensor_name} tensor shape: "
-            f"{tuple(int(x) for x in tensor.shape)}"
-        )
-    raise ValueError("Either channel_sizes or anchor_count must be provided.")
-
-
 def _ensure_runtime_deps() -> None:
     global cv2, litert_interpreter, litert_load_delegate, np, yaml
     if cv2 is None:
@@ -200,165 +141,10 @@ def _ensure_runtime_deps() -> None:
         yaml = _yaml
 
 
-def sigmoid_clip(x: np.ndarray) -> np.ndarray:
-    x = x.astype(np.float32)
-    x = np.clip(x, -80.0, 80.0)
-    return 1.0 / (1.0 + np.exp(-x))
-
-
 def dequant(arr: np.ndarray, scale: float, zp: int) -> np.ndarray:
     if scale and scale != 0:
         return (arr.astype(np.float32) - float(zp)) * float(scale)
     return arr.astype(np.float32)
-
-
-def clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
-
-
-def letterbox_bgr(
-    image_bgr: np.ndarray,
-    new_shape: tuple[int, int] = (640, 640),
-    color: tuple[int, int, int] = (114, 114, 114),
-) -> tuple[np.ndarray, tuple[float, float, float]]:
-    h0, w0 = image_bgr.shape[:2]
-    new_h, new_w = new_shape
-
-    ratio = min(new_h / h0, new_w / w0)
-    resized_w = int(round(w0 * ratio))
-    resized_h = int(round(h0 * ratio))
-
-    dw = (new_w - resized_w) / 2.0
-    dh = (new_h - resized_h) / 2.0
-
-    resized = cv2.resize(
-        image_bgr, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR
-    )
-
-    top = int(round(dh - 0.1))
-    bottom = int(round(dh + 0.1))
-    left = int(round(dw - 0.1))
-    right = int(round(dw + 0.1))
-
-    padded = cv2.copyMakeBorder(
-        resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
-    )
-    return padded, (float(ratio), float(dw), float(dh))
-
-
-@lru_cache(maxsize=1)
-def build_anchor_centers_8400() -> tuple[np.ndarray, np.ndarray]:
-    centers = []
-    strides = []
-    for grid, stride in ((80, 8.0), (40, 16.0), (20, 32.0)):
-        ys, xs = np.meshgrid(
-            np.arange(grid, dtype=np.float32),
-            np.arange(grid, dtype=np.float32),
-            indexing="ij",
-        )
-        ax = (xs + 0.5) * stride
-        ay = (ys + 0.5) * stride
-        centers.append(np.stack([ax, ay], axis=-1).reshape(-1, 2))
-        strides.append(np.full((grid * grid,), stride, dtype=np.float32))
-    return np.concatenate(centers, axis=0), np.concatenate(strides, axis=0)
-
-
-def dfl_decode_to_ltrb_pixels(box64x_n: np.ndarray, strides: np.ndarray) -> np.ndarray:
-    num_anchors = box64x_n.shape[1]
-    reg = box64x_n.reshape(4, REG_MAX, num_anchors).astype(np.float32)
-    reg = reg - reg.max(axis=1, keepdims=True)
-    exp = np.exp(reg)
-    prob = exp / exp.sum(axis=1, keepdims=True)
-    proj = np.arange(REG_MAX, dtype=np.float32).reshape(1, REG_MAX, 1)
-    dist_bins = (prob * proj).sum(axis=1)
-    return dist_bins * strides.reshape(1, num_anchors)
-
-
-def dfl_to_xyxy_pixels(
-    box64x_n: np.ndarray, centers_xy: np.ndarray, strides: np.ndarray
-) -> np.ndarray:
-    ltrb = dfl_decode_to_ltrb_pixels(box64x_n, strides)
-    left, top, right, bottom = ltrb[0], ltrb[1], ltrb[2], ltrb[3]
-    ax, ay = centers_xy[:, 0], centers_xy[:, 1]
-
-    x1 = ax - left
-    y1 = ay - top
-    x2 = ax + right
-    y2 = ay + bottom
-
-    xyxy = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
-    xyxy[:, 0] = np.clip(xyxy[:, 0], 0.0, IMG_W)
-    xyxy[:, 1] = np.clip(xyxy[:, 1], 0.0, IMG_H)
-    xyxy[:, 2] = np.clip(xyxy[:, 2], 0.0, IMG_W)
-    xyxy[:, 3] = np.clip(xyxy[:, 3], 0.0, IMG_H)
-    return xyxy
-
-
-def ltrb_grid_to_xyxy_pixels(
-    box4x_n: np.ndarray, centers_xy: np.ndarray, strides: np.ndarray
-) -> np.ndarray:
-    box = np.maximum(box4x_n.astype(np.float32).T, 0.0)
-    left, top, right, bottom = box[:, 0], box[:, 1], box[:, 2], box[:, 3]
-    ax, ay = centers_xy[:, 0], centers_xy[:, 1]
-
-    x1 = ax - left * strides
-    y1 = ay - top * strides
-    x2 = ax + right * strides
-    y2 = ay + bottom * strides
-
-    xyxy = np.stack([x1, y1, x2, y2], axis=1).astype(np.float32)
-    xyxy[:, 0] = np.clip(xyxy[:, 0], 0.0, IMG_W)
-    xyxy[:, 1] = np.clip(xyxy[:, 1], 0.0, IMG_H)
-    xyxy[:, 2] = np.clip(xyxy[:, 2], 0.0, IMG_W)
-    xyxy[:, 3] = np.clip(xyxy[:, 3], 0.0, IMG_H)
-    return xyxy
-
-
-def classwise_nms_xyxy(
-    xyxy: np.ndarray,
-    scores: np.ndarray,
-    class_ids: np.ndarray,
-    conf_thres: float,
-    iou_thres: float,
-    max_det: int,
-) -> list[int]:
-    kept: list[int] = []
-
-    for cid in np.unique(class_ids):
-        idx = np.where(class_ids == cid)[0]
-        if idx.size == 0:
-            continue
-        idx = idx[scores[idx] >= conf_thres]
-        if idx.size == 0:
-            continue
-
-        tlwh = []
-        cls_scores = scores[idx].tolist()
-        for x1, y1, x2, y2 in xyxy[idx].astype(np.float32):
-            tlwh.append([float(x1), float(y1), float(x2 - x1), float(y2 - y1)])
-
-        keep_local = cv2.dnn.NMSBoxes(tlwh, cls_scores, conf_thres, iou_thres)
-        if len(keep_local) == 0:
-            continue
-
-        if isinstance(keep_local, np.ndarray):
-            keep_local = keep_local.flatten().astype(int).tolist()
-        else:
-            keep_local = [int(i) for i in keep_local]
-
-        kept.extend(idx[keep_local].tolist())
-
-    kept = sorted(kept, key=lambda i: float(scores[i]), reverse=True)
-    if max_det > 0 and len(kept) > max_det:
-        kept = kept[:max_det]
-    return kept
-
-
-def sort_and_cap(scores: np.ndarray, max_det: int) -> list[int]:
-    keep = np.argsort(scores)[::-1].astype(int).tolist()
-    if max_det > 0 and len(keep) > max_det:
-        keep = keep[:max_det]
-    return keep
 
 
 def confidence_to_quantized_logit_threshold(
@@ -487,14 +273,6 @@ def _apply_topk_limit(
     return keep_idx, class_ids, scores
 
 
-def _should_run_nms(flow: str, iou_thres: float, o2o_nms: bool) -> bool:
-    if flow in ("o2m", "default"):
-        return iou_thres > 0
-    if flow == "o2o":
-        return bool(o2o_nms and iou_thres > 0)
-    raise ValueError(f"Unsupported flow: {flow}")
-
-
 class EndToEndInference:
     def __init__(self, args: argparse.Namespace, default_flow: str):
         self.args = args
@@ -531,7 +309,11 @@ class EndToEndInference:
         self.input_is_int8 = self.input_dtype == np.dtype(np.int8)
         self.in_scale, self.in_zp = self.inp.get("quantization", (0.0, 0))
 
+        self.task = getattr(args, "task", "detect")
         self.box_out, self.cls_out = self._resolve_outputs()
+        # Pose and segmentation export more outputs after boxes and scores (see TASK_SPECS); they
+        # come back in that graph order.
+        self.extra_outs = self._resolve_extra_outputs()
         box_ch = _extract_box_layout(self.box_out["shape"])[0]
         self.box_mode = "dfl64" if box_ch == 64 else "ltrb4"
 
@@ -578,6 +360,56 @@ class EndToEndInference:
 
     def _resolve_outputs(self):
         return _resolve_raw_output_details(self.outs)
+
+    def _resolve_extra_outputs(self) -> dict:
+        roles = TASK_SPECS[self.task].outputs[2:]
+        if not roles:
+            return {}
+        used = {self.box_out["index"], self.cls_out["index"]}
+        rest = [(idx, od) for idx, od in enumerate(self.outs) if od["index"] not in used]
+        if len(rest) != len(roles):
+            raise RuntimeError(
+                f"--task {self.task} needs {len(roles)} outputs after boxes and scores "
+                f"({', '.join(roles)}); the model has "
+                f"{[tuple(int(x) for x in od['shape']) for od in self.outs]}"
+            )
+        rest.sort(key=lambda item: _output_order_key(item[1].get("name"), item[0]))
+        return {role: od for role, (_, od) in zip(roles, rest)}
+
+    def _read_float(self, od: dict) -> np.ndarray:
+        scale, zp = od.get("quantization", (0.0, 0))
+        return dequant(self.interpreter.get_tensor(od["index"]), scale, zp)
+
+    def _run_extra_task(self, fn, img_bgr, ratio, pad_w, pad_h):
+        """Pose / segmentation for one image: dequantize all outputs, decode, save."""
+        raw = {role: self._read_float(od) for role, od in self.extra_outs.items()}
+        common = dict(
+            conf_thres=float(self.args.conf_thres),
+            iou_thres=float(self.args.iou_thres),
+            topk=int(self.args.topk),
+            max_det=int(self.args.max_det),
+            flow=self.flow,
+            o2o_nms=bool(self.args.o2o_nms),
+        )
+        box = self._read_float(self.box_out)
+        cls = self._read_float(self.cls_out)
+        if self.task == "pose":
+            xyxy, scores, class_ids, kpts, pre_nms = postprocess_pose(
+                box, cls, raw["kpts"], **common
+            )
+            written = save_pose_outputs(
+                self.args.output_dir, fn, img_bgr, ratio, pad_w, pad_h,
+                xyxy, scores, class_ids, kpts, self.classes,
+            )
+        else:
+            xyxy, scores, class_ids, coefs, proto, pre_nms = postprocess_segment(
+                box, cls, raw["mask_coef"], raw["proto"], **common
+            )
+            written = save_segment_outputs(
+                self.args.output_dir, fn, img_bgr, ratio, pad_w, pad_h,
+                xyxy, scores, class_ids, coefs, proto, self.classes,
+            )
+        return pre_nms, written
 
     def _build_input_tensor(self, padded_bgr: np.ndarray) -> np.ndarray:
         rgb = cv2.cvtColor(padded_bgr, cv2.COLOR_BGR2RGB)
@@ -782,28 +614,31 @@ class EndToEndInference:
             self.interpreter.invoke()
             t_invoke1 = time.perf_counter()
 
-            box_raw = _normalize_output_layout(
-                self.interpreter.get_tensor(self.box_out["index"]),
-                tensor_name="box",
-                channel_sizes=(4, 64),
-            )
-            cls_raw = _normalize_output_layout(
-                self.interpreter.get_tensor(self.cls_out["index"]),
-                tensor_name="class",
-                anchor_count=int(box_raw.shape[2]),
-            )
+            if self.task != "detect":
+                pre_nms, written = self._run_extra_task(fn, img_bgr, ratio, pad_w, pad_h)
+            else:
+                box_raw = _normalize_output_layout(
+                    self.interpreter.get_tensor(self.box_out["index"]),
+                    tensor_name="box",
+                    channel_sizes=(4, 64),
+                )
+                cls_raw = _normalize_output_layout(
+                    self.interpreter.get_tensor(self.cls_out["index"]),
+                    tensor_name="class",
+                    anchor_count=int(box_raw.shape[2]),
+                )
 
-            xyxy, scores, class_ids, pre_nms = self._postprocess(box_raw, cls_raw)
-            written = self._save_outputs(
-                image_name=fn,
-                image_bgr=img_bgr,
-                ratio=ratio,
-                pad_w=pad_w,
-                pad_h=pad_h,
-                xyxy_640=xyxy,
-                scores=scores,
-                class_ids=class_ids,
-            )
+                xyxy, scores, class_ids, pre_nms = self._postprocess(box_raw, cls_raw)
+                written = self._save_outputs(
+                    image_name=fn,
+                    image_bgr=img_bgr,
+                    ratio=ratio,
+                    pad_w=pad_w,
+                    pad_h=pad_h,
+                    xyxy_640=xyxy,
+                    scores=scores,
+                    class_ids=class_ids,
+                )
             t1 = time.perf_counter()
 
             processed += 1
@@ -943,6 +778,7 @@ def run_inference(
     no_qnn: bool = False,
     qnn_lib: str = "/usr/lib/libQnnTFLiteDelegate.so",
     backend: str = "htp",
+    task: str = "detect",
 ) -> None:
     _ensure_runtime_deps()
     _validate_inference_inputs(
@@ -972,6 +808,7 @@ def run_inference(
         no_qnn=bool(no_qnn),
         qnn_lib=qnn_lib,
         backend=backend,
+        task=task,
     )
     try:
         runner = EndToEndInference(args=args, default_flow=default_flow)
@@ -1052,6 +889,7 @@ def run_test_inference_local(
     qnn_lib: str = "/usr/lib/libQnnTFLiteDelegate.so",
     backend: str = "htp",
     enforce_iq9_native: bool = True,
+    task: str = "detect",
 ) -> None:
     if enforce_iq9_native and not _is_iq9_native_runtime():
         raise RuntimeError(
@@ -1081,6 +919,7 @@ def run_test_inference_local(
             no_qnn=no_qnn,
             qnn_lib=qnn_lib,
             backend=backend,
+            task=task,
         )
     finally:
         if tmp_obj is not None:
@@ -1107,12 +946,19 @@ def run_test_inference_adb(
     no_qnn: bool = False,
     qnn_lib: str = "/usr/lib/libQnnTFLiteDelegate.so",
     backend: str = "htp",
+    task: str = "detect",
 ) -> None:
     _ensure_runtime_deps()
     try:
-        from tool.adb_runtime_bootstrap import ensure_adb_runtime_venv
+        from tool.adb_runtime_bootstrap import (
+            ensure_adb_runtime_venv,
+            push_postprocess_package,
+        )
     except ModuleNotFoundError:
-        from adb_runtime_bootstrap import ensure_adb_runtime_venv
+        from adb_runtime_bootstrap import (
+            ensure_adb_runtime_venv,
+            push_postprocess_package,
+        )
 
     validate_test_model_inputs(
         model_path=model_path,
@@ -1159,6 +1005,7 @@ def run_test_inference_adb(
         _adb_push(adb_serial, local_model, remote_model)
         _adb_push(adb_serial, local_yaml, remote_yaml)
         _adb_push(adb_serial, local_script, remote_script)
+        push_postprocess_package(adb_serial, remote_run_dir)
 
         for image in collect_image_files(prepared_dir):
             _adb_push(adb_serial, str(image), f"{remote_img_dir}/{image.name}")
@@ -1197,6 +1044,8 @@ def run_test_inference_adb(
             remote_cmd.append("--disable-int8-prefilter")
         if no_qnn:
             remote_cmd.append("--no-qnn")
+        if task != "detect":
+            remote_cmd += ["--task", task]
 
         _adb_shell(adb_serial, " ".join(shlex.quote(c) for c in remote_cmd))
         _adb_pull(adb_serial, f"{remote_output_dir}/.", str(pull_output_dir))
@@ -1238,6 +1087,9 @@ def main() -> None:
     parser.add_argument("--no-qnn", action="store_true")
     parser.add_argument("--qnn-lib", default="/usr/lib/libQnnTFLiteDelegate.so")
     parser.add_argument("--backend", default="htp")
+    parser.add_argument(
+        "--task", choices=["detect", "pose", "segment"], default="detect"
+    )
 
     args = parser.parse_args()
     run_inference(
@@ -1257,6 +1109,7 @@ def main() -> None:
         no_qnn=args.no_qnn,
         qnn_lib=args.qnn_lib,
         backend=args.backend,
+        task=args.task,
     )
 
 

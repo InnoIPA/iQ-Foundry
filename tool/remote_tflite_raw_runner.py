@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import time
 
 import numpy as np
 
@@ -23,6 +24,12 @@ import numpy as np
 # interpreter. It exposes Interpreter/load_delegate with the same signatures as
 # tf.lite.Interpreter / tf.lite.experimental.load_delegate.
 from ai_edge_litert.interpreter import Interpreter, load_delegate
+
+# tool/postprocess is pushed next to this script (see push_postprocess_package).
+try:
+    from tool.postprocess.outputs import save_avg_invoke_ms, save_raw_outputs
+except ModuleNotFoundError:
+    from postprocess.outputs import save_avg_invoke_ms, save_raw_outputs
 
 
 def dequant(arr: np.ndarray, scale: float, zp: int) -> np.ndarray:
@@ -76,6 +83,20 @@ def find_boxes_scores(output_details, anchor_count=8400):
     return output_details[box_idx], output_details[cls_idx]
 
 
+def find_extra_outputs(output_details, used_indices, count):
+    """The outputs after boxes and scores (pose: kpts; segment: mask_coef, proto), in graph order."""
+    rest = [
+        (idx, od) for idx, od in enumerate(output_details) if od["index"] not in used_indices
+    ]
+    if len(rest) != count:
+        raise RuntimeError(
+            f"Expected {count} outputs besides boxes and scores, got "
+            f"{[tuple(int(v) for v in od['shape']) for od in output_details]}"
+        )
+    rest.sort(key=lambda item: _output_order_key(item[1].get("name"), item[0]))
+    return [od for _, od in rest]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -84,6 +105,7 @@ def main():
     ap.add_argument("--no-qnn", action="store_true")
     ap.add_argument("--qnn-lib", default="/usr/lib/libQnnTFLiteDelegate.so")
     ap.add_argument("--backend", default="htp")
+    ap.add_argument("--task", choices=["detect", "pose", "segment", "classify"], default="detect")
     args = ap.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -111,7 +133,26 @@ def main():
 
     input_detail = interpreter.get_input_details()[0]
     output_details = interpreter.get_output_details()
-    out_box, out_cls = find_boxes_scores(output_details)
+    if args.task == "classify":
+        # A classifier has one output, the raw class scores.
+        if len(output_details) != 1:
+            raise RuntimeError(
+                "Expected one output (logits) for --task classify, got "
+                f"{[tuple(int(v) for v in od['shape']) for od in output_details]}"
+            )
+    else:
+        out_box, out_cls = find_boxes_scores(output_details)
+        extra_roles = {"detect": (), "pose": ("kpts",), "segment": ("mask_coef", "proto")}[
+            args.task
+        ]
+        extra_outs = dict(
+            zip(
+                extra_roles,
+                find_extra_outputs(
+                    output_details, {out_box["index"], out_cls["index"]}, len(extra_roles)
+                ),
+            )
+        )
 
     input_files = sorted(input_dir.glob("*.npy"))
     if not input_dir.exists():
@@ -126,6 +167,7 @@ def main():
             "push did not upload any inputs."
         )
 
+    invoke_seconds = []
     for in_file in input_files:
         x = np.load(in_file)
         expected_dtype = np.dtype(input_detail["dtype"])
@@ -150,7 +192,18 @@ def main():
                     f"expected {expected_dtype}, got {x.dtype}"
                 )
         interpreter.set_tensor(input_detail["index"], x)
+        t0 = time.perf_counter()
         interpreter.invoke()
+        invoke_seconds.append(time.perf_counter() - t0)
+
+        stem = in_file.stem
+        if args.task == "classify":
+            od = output_details[0]
+            sc, zp = od.get("quantization", (0.0, 0))
+            outputs = {"logits": dequant(interpreter.get_tensor(od["index"]), sc, zp)}
+            save_raw_outputs(output_dir, stem, outputs)
+            print(f"done: {in_file.name}")
+            continue
 
         box_raw = interpreter.get_tensor(out_box["index"])
         cls_raw = interpreter.get_tensor(out_cls["index"])
@@ -161,11 +214,14 @@ def main():
         boxes = dequant(box_raw, b_sc, b_zp)
         scores = dequant(cls_raw, c_sc, c_zp)
 
-        stem = in_file.stem
-        np.save(output_dir / f"{stem}_boxes.npy", boxes)
-        np.save(output_dir / f"{stem}_scores.npy", scores)
+        outputs = {"boxes": boxes, "scores": scores}
+        for role, od in extra_outs.items():
+            sc, zp = od.get("quantization", (0.0, 0))
+            outputs[role] = dequant(interpreter.get_tensor(od["index"]), sc, zp)
+        save_raw_outputs(output_dir, stem, outputs)
 
         print(f"done: {in_file.name}")
+    save_avg_invoke_ms(output_dir, invoke_seconds)
 
 
 if __name__ == "__main__":

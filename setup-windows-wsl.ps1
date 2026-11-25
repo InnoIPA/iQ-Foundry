@@ -599,7 +599,7 @@ function Confirm-QcOnlyContinuation {
     param([string]$Reason)
 
     # This bypass only exists for qc-only setup when there is no usable target device. The normal
-    # USB attach and verification path for mAP/test stays unchanged once a BUSID is resolved.
+    # USB attach and verification path for eval/test stays unchanged once a BUSID is resolved.
     Write-WarnLine $Reason
     Write-WarnLine "Only qc mode can work without a connected target device."
 
@@ -608,7 +608,7 @@ function Confirm-QcOnlyContinuation {
         return $true
     }
 
-    throw "USB target setup was cancelled. Connect the target device and rerun this script for mAP or test."
+    throw "USB target setup was cancelled. Connect the target device and rerun this script for eval or test."
 }
 
 function Resolve-UsbBusId {
@@ -626,7 +626,7 @@ function Resolve-UsbBusId {
         if ($RequestedBusId) {
             throw "BUSID '$RequestedBusId' was not found in the current usbipd device list."
         }
-        if (Confirm-QcOnlyContinuation -Reason "usbipd did not report any attachable USB devices, so no target device is available for mAP or test.") {
+        if (Confirm-QcOnlyContinuation -Reason "usbipd did not report any attachable USB devices, so no target device is available for eval or test.") {
             return $null
         }
     }
@@ -676,7 +676,7 @@ function Resolve-UsbBusId {
         return $chosen.BusId
     }
 
-    if (Confirm-QcOnlyContinuation -Reason "No Qualcomm/exmp-q911 USB target device was selected, so mAP and test cannot run from this host right now.") {
+    if (Confirm-QcOnlyContinuation -Reason "No Qualcomm/exmp-q911 USB target device was selected, so eval and test cannot run from this host right now.") {
         return $null
     }
 }

@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Shared QAIRT inference helpers for test mode and mAP evaluation.
+"""Shared QAIRT inference helpers for test mode and eval mode.
 
 QAIRT runs a pre-compiled HTP context binary through `qnn-net-run`. The target
 already ships the QAIRT runtime, so nothing is installed on device: inputs are
@@ -45,6 +45,7 @@ from tool.onnx_inference import (
     collect_image_files,
     letterbox_bgr,
 )
+from tool.postprocess.specs import MODEL_SPECS, TASK_SPECS
 
 try:
     import numpy as np
@@ -58,8 +59,8 @@ except Exception:
 
 ANCHOR_COUNT = 8400
 # Box channel count per family; also selects the decoder downstream.
-EXPECTED_BOX_CHANNELS = {"yolov10": 64, "yolov11": 64, "yolov26": 4}
-EXPECTED_BOX_MODES = {"yolov10": "dfl64", "yolov11": "dfl64", "yolov26": "ltrb4"}
+EXPECTED_BOX_CHANNELS = {name: spec.box_channels for name, spec in MODEL_SPECS.items()}
+EXPECTED_BOX_MODES = {name: spec.box_mode for name, spec in MODEL_SPECS.items()}
 
 QAIRT_SDK_RELATIVE_PATH = "vendor/qairt/2.47.0.260601"
 DEFAULT_QAIRT_BACKEND = "libQnnHtp.so"
@@ -141,7 +142,16 @@ class QAIRTModelMeta:
         class_count: int,
         box_quant: QuantParams | None,
         class_quant: QuantParams | None,
+        task: str = "detect",
+        extra_shapes: dict | None = None,
+        input_shape: tuple | None = None,
     ):
+        self.task = task
+        # Graph input shape; only filled for classification (the input size comes from the model).
+        self.input_shape = input_shape
+        # Shapes of the outputs after boxes and scores (pose: kpts; segment: mask_coef, proto),
+        # as the context binary reports them.
+        self.extra_shapes = extra_shapes or {}
         self.model_path = model_path
         self.model_type = model_type
         self.model_precision = model_precision
@@ -154,6 +164,13 @@ class QAIRTModelMeta:
         self.class_count = class_count
         self.box_quant = box_quant
         self.class_quant = class_quant
+
+    @property
+    def output_names(self) -> list[str]:
+        """Graph output names, in the role order of the task (see TaskSpec.outputs)."""
+        if self.task == "classify":
+            return [self.box_output_name]  # the only output, the logits (kept in the box slot)
+        return [self.box_output_name, self.class_output_name, *self.extra_shapes]
 
 
 def _quant_params_from_tensor(info: dict) -> QuantParams | None:
@@ -170,7 +187,7 @@ def _quant_params_from_tensor(info: dict) -> QuantParams | None:
 
 
 def load_qairt_model_metadata(
-    model_path: str, model_type: str, precision: str
+    model_path: str, model_type: str, precision: str, task: str = "detect"
 ) -> QAIRTModelMeta:
     """Read graph I/O from the context binary and validate it against --type."""
     if not os.path.exists(model_path):
@@ -194,13 +211,30 @@ def load_qairt_model_metadata(
         for key in ("graphInputs", "graphOutputs")
         for t in graph.get(key, [])
     }
-    for required in ("image", "boxes", "scores"):
+    for required in ("image", *TASK_SPECS[task].outputs):
         if required not in tensors:
             raise RuntimeError(
                 f"Context binary is missing the '{required}' tensor. "
                 f"Found: {sorted(tensors)}. Check that --model is an iQ-Foundry "
                 "QAIRT artifact."
             )
+
+    if task == "classify":
+        # One output, the logits; it sits in the box fields (class_count = number of classes).
+        return QAIRTModelMeta(
+            model_path=model_path,
+            model_type=model_type,
+            model_precision=precision,
+            input_name="image",
+            box_output_name="logits",
+            class_output_name="",
+            box_mode="",
+            class_count=int(list(tensors["logits"]["dimensions"])[-1]),
+            box_quant=None,
+            class_quant=None,
+            task=task,
+            input_shape=tuple(int(v) for v in tensors["image"]["dimensions"]),
+        )
 
     box_dims = list(tensors["boxes"]["dimensions"])
     cls_dims = list(tensors["scores"]["dimensions"])
@@ -216,7 +250,22 @@ def load_qairt_model_metadata(
     if len(cls_dims) != 3 or cls_dims[2] != ANCHOR_COUNT:
         raise RuntimeError(f"Unexpected scores shape {cls_dims}.")
 
+    extra_shapes = {
+        role: tuple(int(v) for v in tensors[role]["dimensions"])
+        for role in TASK_SPECS[task].outputs[2:]
+    }
+    if task == "pose":
+        kpt = extra_shapes["kpts"]
+        if len(kpt) != 3 or kpt[2] != ANCHOR_COUNT or kpt[1] % 3 != 0:
+            raise RuntimeError(f"Unexpected kpts shape {list(kpt)}.")
+    elif task == "segment":
+        coef = extra_shapes["mask_coef"]
+        if len(coef) != 3 or coef[2] != ANCHOR_COUNT:
+            raise RuntimeError(f"Unexpected mask_coef shape {list(coef)}.")
+
     return QAIRTModelMeta(
+        task=task,
+        extra_shapes=extra_shapes,
         model_path=model_path,
         model_type=model_type,
         model_precision=precision,
@@ -240,22 +289,28 @@ def build_qairt_input_tensor(image_bgr):
     return np.ascontiguousarray(tensor, dtype=np.float32), ratio, pad_w, pad_h
 
 
-def _read_result_pair(result_dir: str, meta: QAIRTModelMeta):
-    """Load one qnn-net-run result directory as (boxes, scores) float32 tensors."""
+def _read_results(result_dir: str, meta: QAIRTModelMeta) -> dict:
+    """Load one qnn-net-run result directory as {role: float32 tensor}."""
     _ensure_runtime_deps()
-    box_channels = EXPECTED_BOX_CHANNELS[meta.model_type]
-    box_path = os.path.join(result_dir, f"{meta.box_output_name}.raw")
-    cls_path = os.path.join(result_dir, f"{meta.class_output_name}.raw")
-    for path in (box_path, cls_path):
+    if meta.task == "classify":
+        shapes = {"logits": (1, meta.class_count)}
+    else:
+        shapes = {
+            "boxes": (1, EXPECTED_BOX_CHANNELS[meta.model_type], ANCHOR_COUNT),
+            "scores": (1, meta.class_count, ANCHOR_COUNT),
+            **meta.extra_shapes,
+        }
+    paths = {
+        role: os.path.join(result_dir, f"{name}.raw")
+        for role, name in zip(TASK_SPECS[meta.task].outputs, meta.output_names)
+    }
+    for path in paths.values():
         if not os.path.exists(path):
             raise RuntimeError(f"qnn-net-run produced no output at {path}")
-    boxes = np.fromfile(box_path, dtype=np.float32).reshape(
-        1, box_channels, ANCHOR_COUNT
-    )
-    scores = np.fromfile(cls_path, dtype=np.float32).reshape(
-        1, meta.class_count, ANCHOR_COUNT
-    )
-    return boxes, scores
+    return {
+        role: np.fromfile(path, dtype=np.float32).reshape(shapes[role])
+        for role, path in paths.items()
+    }
 
 
 def resolve_qairt_backend_path(qnn_lib: str) -> str:
@@ -335,6 +390,7 @@ class QAIRTRawModel:
         qnn_lib: str = DEFAULT_QAIRT_BACKEND,
         backend: str = "htp",
         no_qnn: bool = False,
+        task: str = "detect",
     ):
         _ = backend  # a context binary is HTP-only; quant params come from it
         if no_qnn:
@@ -342,7 +398,7 @@ class QAIRTRawModel:
                 "--no-qnn is not supported by the QAIRT runtime: a context binary "
                 "is pre-compiled for the HTP and has no CPU fallback."
             )
-        self.meta = load_qairt_model_metadata(model_path, model_type, precision)
+        self.meta = load_qairt_model_metadata(model_path, model_type, precision, task)
         self.backend_lib = resolve_qairt_backend_path(qnn_lib)
         self.last_invoke_time_s = None
         self.device_time_included = True
@@ -382,10 +438,9 @@ class QAIRTRawModel:
         )
         # Reported invoke time is qnn-net-run's own NetRun average, not wall clock.
         self.last_invoke_time_s = read_local_netrun_seconds(out_dir)
-        boxes, scores = _read_result_pair(os.path.join(out_dir, "Result_0"), self.meta)
+        outputs = _read_results(os.path.join(out_dir, "Result_0"), self.meta)
         return (
-            boxes,
-            scores,
+            outputs,
             ratio,
             pad_w,
             pad_h,
@@ -412,6 +467,7 @@ class ADBQAIRTRawModel:
         no_qnn: bool = False,
         shared_remote_input_dir: str | None = None,
         shared_meta: dict | None = None,
+        task: str = "detect",
     ):
         _ = backend
         if no_qnn:
@@ -419,7 +475,7 @@ class ADBQAIRTRawModel:
                 "--no-qnn is not supported by the QAIRT runtime: a context binary "
                 "is pre-compiled for the HTP and has no CPU fallback."
             )
-        self.meta = load_qairt_model_metadata(model_path, model_type, precision)
+        self.meta = load_qairt_model_metadata(model_path, model_type, precision, task)
         self.adb_serial = adb_serial
         self.backend_lib = resolve_qairt_backend_path(qnn_lib)
         self.shared_remote_input_dir = shared_remote_input_dir
@@ -484,11 +540,10 @@ class ADBQAIRTRawModel:
         result_dir = self._results.get(rec.image_id)
         if result_dir is None:
             raise RuntimeError(f"No QAIRT result for image_id {rec.image_id}")
-        boxes, scores = _read_result_pair(result_dir, self.meta)
+        outputs = _read_results(result_dir, self.meta)
         info = self.shared_meta[rec.image_id]
         return (
-            boxes,
-            scores,
+            outputs,
             info["ratio"],
             info["padw"],
             info["padh"],
@@ -510,14 +565,15 @@ def prepare_shared_qairt_inputs(
     precision: str,
     adb_serial: str | None,
     remote_input_dir: str,
+    task: str = "detect",
 ):
     """Letterbox every image once on the host and push the raw tensors to target.
 
     Returns (tmpdir, meta_by_image_id, model_meta, None). The trailing None keeps
-    the 4-tuple shape the mAP caller already unpacks for the ONNX path.
+    the 4-tuple shape the eval caller already unpacks for the ONNX path.
     """
     _ensure_runtime_deps()
-    meta = load_qairt_model_metadata(model_path, model_type, precision)
+    meta = load_qairt_model_metadata(model_path, model_type, precision, task)
     tmp = tempfile.TemporaryDirectory(prefix="qairt_shared_inputs_")
     stage = os.path.join(tmp.name, "inputs")
     os.makedirs(stage, exist_ok=True)
@@ -571,6 +627,7 @@ def run_qairt_test_inference_local(
     runtime: str = "qairt",
     precision: str = "int8",
     enforce_iq9_native: bool = False,
+    task: str = "detect",
 ) -> None:
     """Run test mode directly on the target using its own qnn-net-run."""
     if runtime != "qairt":
@@ -594,6 +651,7 @@ def run_qairt_test_inference_local(
         qnn_lib=qnn_lib,
         backend=backend,
         no_qnn=no_qnn,
+        task=task,
     )
     try:
         _run_test_directory(
@@ -608,6 +666,7 @@ def run_qairt_test_inference_local(
             max_det=max_det,
             postprocess_flow=postprocess_flow,
             o2o_nms=o2o_nms,
+            task=task,
         )
     finally:
         runner.cleanup()
@@ -659,6 +718,7 @@ def run_qairt_test_inference_adb(
     precision: str = "int8",
     adb_serial: str | None = None,
     remote_workdir: str = DEFAULT_QAIRT_REMOTE_WORKDIR,
+    task: str = "detect",
 ) -> None:
     """Run test mode on the target over adb; decode and draw on the host."""
     if runtime != "qairt":
@@ -682,6 +742,7 @@ def run_qairt_test_inference_adb(
         qnn_lib=qnn_lib,
         backend=backend,
         no_qnn=no_qnn,
+        task=task,
     )
     try:
         # Push one raw tensor per image, run them as a single batch, pull results.
@@ -737,11 +798,11 @@ def run_qairt_test_inference_adb(
 
             results = {}
             for index, image_file in enumerate(image_files):
-                boxes, scores = _read_result_pair(
+                outputs = _read_results(
                     os.path.join(root, f"Result_{index}"), runner.meta
                 )
                 ratio, pad_w, pad_h, orig = geometry[str(image_file)]
-                results[str(image_file)] = (boxes, scores, ratio, pad_w, pad_h, orig)
+                results[str(image_file)] = (outputs, ratio, pad_w, pad_h, orig)
 
             _run_test_directory(
                 runner=_AdbBatchTestRunner(runner, results),
@@ -755,6 +816,7 @@ def run_qairt_test_inference_adb(
                 max_det=max_det,
                 postprocess_flow=postprocess_flow,
                 o2o_nms=o2o_nms,
+                task=task,
             )
             pulled.cleanup()
         finally:
