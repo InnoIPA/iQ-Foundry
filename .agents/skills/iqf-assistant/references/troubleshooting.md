@@ -4,7 +4,7 @@ Use this file to explain a failure to the user and to suggest what they can chan
 change iQ-Foundry's code to make an error go away.** Find the error line in the job log with
 `iqf_job.py status <JOB_DIR> --lines 60`, then look for a matching message below.
 
-## Board and USB (mAP, test)
+## Board and USB (eval, test)
 
 | Message contains | Plain explanation | What the user can do |
 |---|---|---|
@@ -32,7 +32,7 @@ change iQ-Foundry's code to make an error go away.** Find the error line in the 
 | `Permission denied` under `out/` | `out/` belongs to root, because Docker created it. | The user runs `sudo chown -R $USER <iQ-Foundry folder>/out` in their own terminal. |
 | `No images found` | The folder has no `.jpg/.jpeg/.png/.bmp` pictures directly inside it. | Point to the folder that holds the pictures themselves, not a parent folder. Convert other picture formats first. |
 
-## Accuracy check (mAP)
+## Accuracy check (eval)
 
 | Message contains | Plain explanation | What the user can do |
 |---|---|---|
@@ -68,5 +68,5 @@ improve it:
 | `iqf_job.py`: `another job is still running` | Only one mode can run at a time. | Wait for it, or ask the user whether to stop it. |
 | `iqf_job.py status`: `STATE: died` | The background job was stopped from outside, for example because the computer slept or the agent's shell was closed. | Offer the user the same command to run in their own terminal. |
 | `prepare_map_data.py`: `VERDICT: UNSUPPORTED` | The label format is not one the tool reads. | Ask the user to export COCO, YOLO, VOC, LabelMe or CVAT from their labelling tool. |
-| `prepare_map_data.py`: `VERDICT: FAILED_SELF_CHECK` | The converted copy did not pass mAP mode's own loader. The tool has a bug, or the data is unusual. | Show the `ERROR:` line. Do not run mAP with that copy. |
+| `prepare_map_data.py`: `VERDICT: FAILED_SELF_CHECK` | The converted copy did not pass eval mode's own loader. The tool has a bug, or the data is unusual. | Show the `ERROR:` line. Do not run eval with that copy. |
 | `hub_login.py`: `does not look like a QAI Hub API token` | The token is too short or contains spaces, often a copy/paste slip. Nothing was run. | Copy the token again from the QAI Hub website. |

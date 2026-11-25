@@ -138,7 +138,7 @@ class CheckSetupParserTests(unittest.TestCase):
             cs.Check("device", cs.MISSING, ""),
         ]
         self.assertEqual(
-            cs.readiness(checks), {"qc": True, "mAP": False, "test": False}
+            cs.readiness(checks), {"qc": True, "eval": False, "test": False}
         )
         checks[-3] = cs.Check("qai_hub", cs.MISSING, "")
         self.assertFalse(cs.readiness(checks)["qc"])

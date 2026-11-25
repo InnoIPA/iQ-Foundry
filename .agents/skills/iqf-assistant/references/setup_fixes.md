@@ -124,7 +124,7 @@ check again.
 
 ### `device`
 
-The EXMP-Q911 board is needed for **mAP and test only**. The user can still convert (qc) without
+The EXMP-Q911 board is needed for **eval and test only**. The user can still convert (qc) without
 it.
 
 - **"no EXMP-Q911 device found":**
@@ -147,7 +147,7 @@ it.
 - **"<serial>=unauthorized":** the board has not accepted this computer's adb key. Re-plug it,
   then check again.
 - **"N devices attached" (WARN):** ask the user which board to use. Pass its serial with
-  `--adb-serial <serial>` to mAP and test.
+  `--adb-serial <serial>` to eval and test.
 
 ## Windows checks (`check_setup_windows.ps1`)
 

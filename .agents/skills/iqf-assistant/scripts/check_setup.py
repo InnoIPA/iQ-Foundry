@@ -438,7 +438,7 @@ def readiness(checks: list[Check]) -> dict[str, bool]:
     base = ("os", "repo", "docker_cli", "docker_group", "docker_daemon", "image")
     qc_ready = ok(*base, "qai_hub", "qai_hub_login")
     device_ready = ok(*base, "usb", "device")
-    return {"qc": qc_ready, "mAP": device_ready, "test": device_ready}
+    return {"qc": qc_ready, "eval": device_ready, "test": device_ready}
 
 
 def collect(args) -> list[Check]:

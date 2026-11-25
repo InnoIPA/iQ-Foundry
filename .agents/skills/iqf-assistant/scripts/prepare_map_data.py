@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Check mAP annotations/images against what iQ-Foundry's mAP mode accepts, and reformat them.
+"""Check eval annotations/images against what iQ-Foundry's eval mode accepts, and reformat them.
 
     prepare_map_data.py inspect --annotations A --images I --model M.pt
     prepare_map_data.py convert --annotations A --images I --model M.pt [--out DIR]
@@ -28,7 +28,7 @@ itself, for users who do not have one.
 `convert` writes a NEW folder (default <repo>/out/iqf-assistant/map_data/<timestamp>/) with
 annotations_coco.json, conversion_report.md and, only when some images must be re-encoded,
 an images/ copy. The user's files are never modified. The result is checked with the same
-loaders mAP mode uses (tool/test_map.py) before it is reported as usable.
+loaders eval mode uses (tool/test_map.py) before it is reported as usable.
 
 Accepted inputs: COCO json, YOLO txt (incl. the Ultralytics images/ + labels/ + data.yaml layout,
 segmentation polygons and a trailing confidence column), Pascal VOC xml, LabelMe json and
@@ -193,7 +193,7 @@ class Dataset:
     coco: dict | None = None  # original COCO json (format coco)
     notes: list[str] = field(
         default_factory=list
-    )  # what is different from mAP's format
+    )  # what is different from eval's format
     warnings: list[str] = field(default_factory=list)
     unmatched_labels: list[str] = field(default_factory=list)
     skipped_shapes: int = 0
@@ -456,7 +456,7 @@ def scan(
             1 for im in images if im.path.suffix.lower() in CONVERTIBLE_IMAGE_SUFFIXES
         )
         ds.notes.append(
-            f"{n} image(s) are .webp/.tif/.jfif, which mAP mode does not read; they are converted to .png copies"
+            f"{n} image(s) are .webp/.tif/.jfif, which eval mode does not read; they are converted to .png copies"
         )
     index = ImageIndex(images)
 
@@ -494,7 +494,7 @@ def scan(
             ds.skipped_shapes += skipped
             _attach(ds, index, lf.relative_to(ann_path), boxes, hint)
         ds.notes.append(
-            "labels are in LabelMe format, which mAP mode does not read; they are rewritten as one COCO file"
+            "labels are in LabelMe format, which eval mode does not read; they are rewritten as one COCO file"
         )
     elif fmt == "cvat":
         root = ET.parse(ann_path).getroot()
@@ -520,7 +520,7 @@ def scan(
             )
             _attach(ds, index, Path(name), boxes, name)
         ds.notes.append(
-            "labels are in CVAT format, which mAP mode does not read; they are rewritten as one COCO file"
+            "labels are in CVAT format, which eval mode does not read; they are rewritten as one COCO file"
         )
 
     if ds.skipped_shapes:
@@ -650,7 +650,7 @@ def plan_classes(
 ):
     """Return (label -> model index | None) or raise UserInputNeeded for unknown classes."""
     if ds.format_name == "yolo" and not ds.dataset_names:
-        # No names file: YOLO ids are taken in the model's own class order, as mAP mode does.
+        # No names file: YOLO ids are taken in the model's own class order, as eval mode does.
         return None, []
     labels = _dataset_labels(ds)
     mapping, notes, unknown = resolve_class_mapping(
@@ -781,7 +781,7 @@ def build_coco(
     if unlabelled:
         warnings.append(
             f"{unlabelled} image(s) have no labels; they are evaluated as images with no objects, "
-            "exactly as mAP mode does"
+            "exactly as eval mode does"
         )
     stats = {
         "images": len(coco_images),
@@ -838,7 +838,7 @@ def _rebuild_coco(ds, model_names, mapping, notes, warnings, categories) -> Buil
             "none of the images listed in the COCO file were found in the images folder"
         )
 
-    # Keep the original image order: mAP mode's --max-images takes the first N images.
+    # Keep the original image order: eval mode's --max-images takes the first N images.
     new_ids, coco_images = {}, []
     for new_id, (old_id, (entry, w, h)) in enumerate(keep_images.items(), start=1):
         new_ids[old_id] = new_id
@@ -896,7 +896,7 @@ def load_model_names(model: Path) -> list[str]:
 
 
 def official_check(annotations: Path, images: Path, model: Path) -> None:
-    """Run the same loading steps mAP mode runs before evaluation (tool/test_map.py)."""
+    """Run the same loading steps eval mode runs before evaluation (tool/test_map.py)."""
     from tool.test_map import (
         build_model_class_to_coco_category_id_map,
         load_coco_images,
@@ -916,11 +916,11 @@ def official_check(annotations: Path, images: Path, model: Path) -> None:
 
 
 def silent_problems(ds: Dataset, model_names: list[str]) -> list[str]:
-    """Problems mAP mode would NOT report, but that make the result wrong or incomplete."""
+    """Problems eval mode would NOT report, but that make the result wrong or incomplete."""
     problems = []
     if ds.format_name in ("yolo", "voc") and ds.nested_images:
         problems.append(
-            "images are in sub-folders; mAP mode only reads images directly inside the images folder"
+            "images are in sub-folders; eval mode only reads images directly inside the images folder"
         )
     if ds.format_name in ("yolo", "voc") and ds.annotations.is_dir():
         nested = [
@@ -932,7 +932,7 @@ def silent_problems(ds: Dataset, model_names: list[str]) -> list[str]:
         ]
         if nested:
             problems.append(
-                "label files are in sub-folders; mAP mode only reads labels directly inside the labels folder"
+                "label files are in sub-folders; eval mode only reads labels directly inside the labels folder"
             )
     if (
         ds.format_name == "yolo"
@@ -941,14 +941,14 @@ def silent_problems(ds: Dataset, model_names: list[str]) -> list[str]:
     ):
         problems.append(
             f"the dataset class list ({ds.names_source.name if ds.names_source else 'names file'}) is in a different "
-            "order than the model's classes; mAP mode would read class numbers in the model's order and give a wrong score"
+            "order than the model's classes; eval mode would read class numbers in the model's order and give a wrong score"
         )
     if ds.unmatched_labels:
         problems.append(
             f"{len(ds.unmatched_labels)} label file(s) do not match any image name"
         )
     if ds.convert_images:
-        problems.append("some images are .webp/.tif/.jfif, which mAP mode skips")
+        problems.append("some images are .webp/.tif/.jfif, which eval mode skips")
     return problems
 
 
@@ -989,15 +989,15 @@ def inner_inspect(args) -> int:
 
     problems = silent_problems(ds, model_names)
     official_error = None
-    # A COCO file found inside a folder is used directly (mAP mode needs the file itself).
+    # A COCO file found inside a folder is used directly (eval mode needs the file itself).
     check_ann = ds.annotations if ds.format_name == "coco" else ann
     if ds.format_name in ("coco", "yolo", "voc"):
         try:
             official_check(check_ann, images, model)
-        except Exception as exc:  # any loader error means mAP mode would stop
+        except Exception as exc:  # any loader error means eval mode would stop
             official_error = f"{type(exc).__name__}: {exc}"
     else:
-        problems.insert(0, f"{ds.format_name} labels are not a format mAP mode reads")
+        problems.insert(0, f"{ds.format_name} labels are not a format eval mode reads")
 
     if official_error is None and not problems:
         _print_kv("VERDICT", "READY")
@@ -1022,7 +1022,7 @@ def inner_inspect(args) -> int:
         return EXIT_INPUT
     _print_kv("VERDICT", "NEEDS_REFORMAT")
     if official_error:
-        _print_kv("REASON", f"mAP mode would stop with: {official_error}")
+        _print_kv("REASON", f"eval mode would stop with: {official_error}")
     for p in problems:
         _print_kv("REASON", p)
     for n in result.notes:
@@ -1115,7 +1115,7 @@ def write_outputs(
             shutil.copy2(src, dst)
     (out / "annotations_coco.json").write_text(json.dumps(result.coco))
     lines = [
-        "# mAP data conversion report",
+        "# eval data conversion report",
         "",
         f"- Created: {datetime.now().astimezone():%Y-%m-%d %H:%M %Z}",
         f"- Original labels: `{ds.annotations}` (format: {ds.format_name})",
@@ -1129,7 +1129,7 @@ def write_outputs(
             for n in (
                 result.notes
                 or [
-                    "labels were rewritten as one COCO file that mAP mode reads directly"
+                    "labels were rewritten as one COCO file that eval mode reads directly"
                 ]
             )
         ],
@@ -1140,8 +1140,8 @@ def write_outputs(
         "",
         "## Result",
         "",
-        f"- Labels for mAP mode: `{out / 'annotations_coco.json'}`",
-        f"- Images for mAP mode: `{result.images_root}`",
+        f"- Labels for eval mode: `{out / 'annotations_coco.json'}`",
+        f"- Images for eval mode: `{result.images_root}`",
         f"- {result.stats['images']} images, {result.stats['labelled_images']} with labels, {result.stats['boxes']} boxes",
         f"- Classes (from the model, {len(model_names)}): {', '.join(model_names)}",
         "",
@@ -1342,7 +1342,7 @@ INNER_COMMANDS = {
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Check and reformat mAP data for iQ-Foundry."
+        description="Check and reformat eval data for iQ-Foundry."
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("inspect", "convert"):
