@@ -24,12 +24,12 @@ docker_image: null
 #   - all
 pipelines: []
 
-# [optional] Modes to run for every selected pipeline, always executed in the order qc -> mAP -> test.
-# Default: [qc, mAP, test]
-modes: [qc, mAP, test]
+# [optional] Modes to run for every selected pipeline, always executed in the order qc -> eval -> test.
+# Default: [qc, eval, test]
+modes: [qc, eval, test]
 
-# [required for qc and mAP] One .pt file per model type used by the selected pipelines.
-# qc converts it; mAP uses it as the reference model. Remove types that are not selected.
+# [required for qc and eval] One .pt file per model type used by the selected pipelines.
+# qc converts it; eval uses it as the reference model. Remove types that are not selected.
 models_pt:
   yolov10: null
   yolov11: null
@@ -40,7 +40,7 @@ calibration:
   dir: null          # directory of calibration images
   max_calib: null    # optional integer; null = product default (200)
 
-# [required for mAP]
+# [required for eval]
 map:
   annotations: null  # COCO instances json (or a YOLO/VOC label directory)
   images: null       # directory with the evaluation images
@@ -51,6 +51,30 @@ test:
   image: null        # a single test image file
   images: null       # a directory of test images
   yaml: null         # class-names yaml (has a `names:` list), e.g. coco.yaml
+
+# [required only when a pose / segment / classify pipeline is selected] Inputs per task. The
+# top-level models_pt / map / test sections above are for detect only and are never reused here.
+# Remove the tasks that are not selected. max_calib, max_images and the device are shared; calibration.dir is shared unless a task sets its own.
+tasks:
+  pose:                 # pipelines 22-28 (yolov26)
+    model_pt: null      # yolov26 pose .pt, e.g. yolo26n-pose.pt
+    map:
+      annotations: null # COCO keypoints json (person_keypoints_*.json) or a folder of YOLO pose .txt
+      images: null
+    test: {image: null, images: null, yaml: null}   # yaml e.g. person.yaml
+  segment:              # pipelines 29-35 (yolov26)
+    model_pt: null      # yolov26 segment .pt, e.g. yolo26n-seg.pt
+    map:
+      annotations: null # COCO instances json with segmentation, or a folder of YOLO segment .txt
+      images: null
+    test: {image: null, images: null, yaml: null}   # yaml e.g. coco.yaml
+  classify:             # pipelines 36-42 (resnet50)
+    model_pt: null      # torchvision resnet50 .pt / .pth
+    map:
+      yaml: null        # class names (`names:` list) in the model's output order
+      images: null      # one sub-folder per class, named as in the yaml
+    test: {image: null, images: null, yaml: null}   # same class yaml
+    calibration: {dir: null}   # optional; else the shared calibration.dir. Use pictures of the same kind as the classes.
 
 # [optional] adb serial of the target. null = the single attached device.
 # Required when more than one device is attached.
@@ -64,7 +88,7 @@ qai_hub:
   use_existing_login: true
 
 # [optional] Pre-built converted model per pipeline id. When set, qc is SKIPPED for that
-# pipeline and mAP/test use this file. Extension must match the runtime
+# pipeline and eval/test use this file. Extension must match the runtime
 # (.tflite for litert, .onnx for onnx, .bin for qairt).
 # Example:  yolov26-litert-int8: /abs/path/model.tflite
 prebuilt_models: {}
@@ -72,10 +96,10 @@ prebuilt_models: {}
 # [optional] Extra backend flags appended to every stage of that mode, exactly as typed by the user.
 # Flags the runner sets itself (paths, --type/--runtime/--precision, --output, --adb, --adb-serial,
 # --max_calib, --max-images, --save, --dry-run) are rejected by validation.
-# Example:  mAP: ["--conf", "0.25"]
+# Example:  eval: ["--conf", "0.25"]
 extra_flags:
   qc: []
-  mAP: []
+  eval: []
   test: []
 
 # [optional] Extra flags for one pipeline only, appended after extra_flags.

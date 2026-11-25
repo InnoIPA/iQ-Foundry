@@ -45,7 +45,8 @@ class PipelineDefinitionTests(unittest.TestCase):
         self.mapper = rp.load_mapper(REPO_ROOT)
 
     def test_all_supported_pipelines_defined_and_consistent_with_product(self) -> None:
-        self.assertEqual(len(self.pipelines), 21)
+        self.assertEqual(len(self.pipelines), 42)
+        self.assertEqual(sum(p.task == "detect" for p in self.pipelines), 21)
         errors, warnings = rp.cross_check_pipelines(self.pipelines, self.mapper)
         self.assertEqual(errors, [])
         self.assertEqual(warnings, [])
@@ -61,7 +62,7 @@ class PipelineDefinitionTests(unittest.TestCase):
         self.assertTrue(warnings)
 
     def test_select_pipelines_by_all_ids_and_globs_keeps_definition_order(self) -> None:
-        self.assertEqual(len(rp.select_pipelines(["all"], self.pipelines)), 21)
+        self.assertEqual(len(rp.select_pipelines(["all"], self.pipelines)), 42)
         picked = rp.select_pipelines(
             ["yolov26-qairt-int8", "yolov10-*-fp32"], self.pipelines
         )
@@ -73,7 +74,7 @@ class PipelineDefinitionTests(unittest.TestCase):
             rp.select_pipelines(["yolov8-litert-int8"], self.pipelines)
 
     def test_pipeline_numbers_are_unique_and_selectable(self) -> None:
-        self.assertEqual([p.num for p in self.pipelines], list(range(1, 22)))
+        self.assertEqual([p.num for p in self.pipelines], list(range(1, 43)))
         by_number = rp.select_pipelines([3, "21", "15-16"], self.pipelines)
         self.assertEqual(
             [p.id for p in by_number],
@@ -106,7 +107,7 @@ class InputsAndPlanTests(unittest.TestCase):
             repo_root: {REPO_ROOT}
             docker_image: iq-foundry:test
             pipelines: [yolov26-litert-fp32, yolov26-litert-int8, yolov11-qairt-fp16]
-            modes: [test, qc, mAP]
+            modes: [test, qc, eval]
             models_pt:
               yolov11: /m/yolo11n.pt
               yolov26: /m/yolo26n.pt
@@ -115,7 +116,7 @@ class InputsAndPlanTests(unittest.TestCase):
             test: {{image: null, images: /t, yaml: /y.yaml}}
             device: {{adb_serial: SER1}}
             extra_flags:
-              mAP: "--conf 0.3"
+              eval: "--conf 0.3"
             {extra}
             """,
         )
@@ -132,9 +133,9 @@ class InputsAndPlanTests(unittest.TestCase):
 
     def test_modes_are_canonical_order_and_output_defaults_to_run_dir(self) -> None:
         inputs = rp.load_inputs(self._inputs(), self.defaults)
-        self.assertEqual(inputs.modes, ["qc", "mAP", "test"])
+        self.assertEqual(inputs.modes, ["qc", "eval", "test"])
         self.assertEqual(inputs.output_dir, (self.root / "run").resolve())
-        self.assertEqual(inputs.extra_flags["mAP"], ["--conf", "0.3"])
+        self.assertEqual(inputs.extra_flags["eval"], ["--conf", "0.3"])
         self.assertEqual(inputs.timeouts_s["qc"], self.defaults["timeouts_s"]["qc"])
 
     def test_calibration_only_passed_when_pipeline_needs_it(self) -> None:
@@ -160,7 +161,7 @@ class InputsAndPlanTests(unittest.TestCase):
                 "artifacts/yolov26-litert-int8/qc/yolov26-litert-int8.tflite"
             )
         )
-        map_argv = plans["mAP"].argv
+        map_argv = plans["eval"].argv
         self.assertEqual(map_argv[map_argv.index("--converted-model") + 1], qc_out)
         self.assertEqual(map_argv[map_argv.index("--max-images") + 1], "10")
         self.assertEqual(map_argv[map_argv.index("--adb-serial") + 1], "SER1")
@@ -170,7 +171,7 @@ class InputsAndPlanTests(unittest.TestCase):
         self.assertIn("--images", test_argv)
         # The wrapper's own --image <tag> precedes `run`; the backend test flags follow the mode.
         self.assertNotIn("--image", test_argv[test_argv.index("test") :])
-        self.assertTrue(plans["mAP"].model_from_qc)
+        self.assertTrue(plans["eval"].model_from_qc)
 
     def test_prebuilt_model_skips_qc_and_feeds_map_and_test(self) -> None:
         path = self._inputs("prebuilt_models: {yolov26-litert-int8: /p/model.tflite}")
@@ -178,8 +179,52 @@ class InputsAndPlanTests(unittest.TestCase):
         plans = self._plans(inputs, "yolov26-litert-int8")
         self.assertFalse(plans["qc"].selected)
         self.assertEqual(plans["qc"].skip_reason, "prebuilt converted model supplied")
-        self.assertFalse(plans["mAP"].model_from_qc)
+        self.assertFalse(plans["eval"].model_from_qc)
         self.assertIn("/p/model.tflite", plans["test"].argv)
+
+    def test_task_pipelines_use_only_their_own_inputs(self) -> None:
+        inputs = rp.load_inputs(
+            self._inputs(
+                """
+            tasks:
+              pose:
+                model_pt: /m/yolo26n-pose.pt
+                map: {annotations: /pose.json, images: /pi}
+                test: {images: /pt, yaml: /person.yaml}
+              classify:
+                model_pt: /m/resnet50.pt
+                calibration: {dir: /c_cls}
+                map: {yaml: /cls.yaml, images: /val}
+                test: {image: /one.jpg, yaml: /cls.yaml}
+            """
+            ),
+            self.defaults,
+        )
+        pose = self._plans(inputs, "yolov26-pose-litert-int8")
+        self.assertIn("--task pose", " ".join(pose["qc"].argv))
+        self.assertIn("/m/yolo26n-pose.pt", pose["qc"].argv)
+        self.assertIn("/pose.json", pose["eval"].argv)
+        self.assertNotIn("/a.json", pose["eval"].argv)
+        self.assertIn("/person.yaml", pose["test"].argv)
+        cls = self._plans(inputs, "resnet50-litert-int8")
+        self.assertIn("/cls.yaml", cls["eval"].argv)
+        self.assertNotIn("--annotations", cls["eval"].argv)
+        self.assertIn("--image", cls["test"].argv)
+        self.assertIn("/c_cls", cls["qc"].argv)
+        self.assertIn("/c", self._plans(inputs, "yolov26-pose-litert-int8")["qc"].argv)
+        # detect commands do not get --task
+        detect = self._plans(inputs, "yolov26-litert-fp32")
+        for plan in detect.values():
+            self.assertNotIn("--task", plan.argv)
+        # a task with no tasks.<task> section gets placeholders, never the detect inputs
+        seg = self._plans(inputs, "yolov26-segment-litert-fp32")
+        self.assertIn("<missing .pt>", seg["qc"].argv)
+        self.assertIn("<missing annotations>", seg["eval"].argv)
+
+    def test_tasks_section_rejects_unknown_task_and_detect(self) -> None:
+        for bad in ("detect", "depth"):
+            with self.assertRaises(rp.RegressionError):
+                rp.load_inputs(self._inputs(f"tasks: {{{bad}: {{}}}}"), self.defaults)
 
     def test_controlled_flags_are_rejected(self) -> None:
         path = self._inputs(
@@ -252,6 +297,24 @@ class ParsingAndEvaluationTests(unittest.TestCase):
         legacy = write(self.root / "b.txt", "fp_map50: 0.5\nint_map50: 0.4\n")
         self.assertAlmostEqual(rp.parse_map_result(legacy)["reference_map50"], 0.5)
 
+    def test_parse_and_evaluate_classify_eval(self) -> None:
+        path = write(
+            Path(self.tmp.name) / "cls.txt",
+            """
+            task: classify
+            num_images: 40
+            reference_top1: 0.800000
+            converted_top1: 0.600000
+            converted_top5: 0.900000
+            top1_agreement_reference_vs_converted: 0.850000
+            """,
+        )
+        metrics = rp.parse_map_result(path)
+        self.assertAlmostEqual(metrics["pct_delta_value"], -25.0)
+        result = rp.evaluate_stage("eval", 0, "done", path, "", self.config)
+        self.assertEqual(result["status"], rp.PASS_WITH_WARNINGS)
+        self.assertIn("top-1", rp.key_result("eval", result))
+
     def test_evaluate_qc_requires_artifact(self) -> None:
         artifact = self.root / "qc" / "m.tflite"
         artifact.parent.mkdir(parents=True)
@@ -284,7 +347,7 @@ class ParsingAndEvaluationTests(unittest.TestCase):
             self.root / "m.txt",
             "reference_map50: 0.5\nconverted_map50: 0.3\npct_delta_vs_reference: -40.00%\n",
         )
-        result = rp.evaluate_stage("mAP", 0, "exited", result_file, "", self.config)
+        result = rp.evaluate_stage("eval", 0, "exited", result_file, "", self.config)
         self.assertEqual(result["status"], rp.PASS_WITH_WARNINGS)
 
     def test_evaluate_test_outputs_and_warning_patterns(self) -> None:
@@ -303,7 +366,7 @@ class ParsingAndEvaluationTests(unittest.TestCase):
 
     def test_evaluate_timeout(self) -> None:
         result = rp.evaluate_stage(
-            "mAP", None, "timeout", self.root / "x", "", self.config
+            "eval", None, "timeout", self.root / "x", "", self.config
         )
         self.assertEqual(result["status"], rp.TIMEOUT)
 
@@ -498,7 +561,7 @@ class ReportTests(unittest.TestCase):
                 "docker_image": "img",
             },
             "validation_checks": {"adb_serial": "SER", "device_model": "Board"},
-            "inputs": {"repo_root": "/repo", "modes": ["qc", "mAP", "test"]},
+            "inputs": {"repo_root": "/repo", "modes": ["qc", "eval", "test"]},
             "pipelines": [
                 {
                     "num": 16,
@@ -514,13 +577,13 @@ class ReportTests(unittest.TestCase):
                             "metrics": {"artifact": "/x/m.tflite", "size_bytes": 2048},
                             "log": "logs/yolov26-litert-fp32/qc.log",
                         },
-                        "mAP": {
+                        "eval": {
                             "status": rp.FAIL,
                             "exit_code": 1,
                             "duration_s": 5,
                             "error_excerpt": "[error] boom",
-                            "command": "./docker/iqf run mAP",
-                            "log": "logs/yolov26-litert-fp32/mAP.log",
+                            "command": "./docker/iqf run eval",
+                            "log": "logs/yolov26-litert-fp32/eval.log",
                             "log_tail": ["[error] boom"],
                         },
                         "test": {"status": rp.SKIPPED, "reason": "test not selected"},
@@ -530,14 +593,14 @@ class ReportTests(unittest.TestCase):
         }
         self.assertEqual(rp.overall_status(results["pipelines"][0]["stages"]), rp.FAIL)
         report = rp.render_report(results)
-        self.assertIn("| No | Pipeline | qc | mAP | test | Overall |", report)
+        self.assertIn("| No | Pipeline | qc | eval | test | Overall |", report)
         self.assertIn(
             "| 16 | yolov26-litert-fp32 | PASS | FAIL | SKIPPED | FAIL |", report
         )
         self.assertIn("## 16. yolov26-litert-fp32", report)
         self.assertIn("| Mode | Status | Exit | Duration | Key result | Log |", report)
         self.assertIn("m.tflite (2.0 KB)", report)
-        self.assertIn("### yolov26-litert-fp32 : mAP — FAIL (exit 1)", report)
+        self.assertIn("### yolov26-litert-fp32 : eval — FAIL (exit 1)", report)
         self.assertEqual(
             rp.overall_status({m: {"status": rp.PASS} for m in rp.MODES}), rp.PASS
         )

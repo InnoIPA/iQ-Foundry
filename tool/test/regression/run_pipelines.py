@@ -49,7 +49,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -71,7 +71,8 @@ TEMPLATE_FILE = (
 )
 DEFAULT_RUNS_DIR = Path("out") / "regression"
 TOKEN_ENV = "IQF_QAI_HUB_TOKEN"
-MODES = ("qc", "mAP", "test")
+MODES = ("qc", "eval", "test")
+TASKS = ("detect", "pose", "segment", "classify")
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 EXIT_OK = 0
@@ -110,7 +111,7 @@ FAILED_STATUSES = {FAIL, TIMEOUT, ABORTED, BLOCKED, NOT_FEASIBLE}
 CONTROLLED_FLAGS = {
     "common": {"--type", "--runtime", "--precision", "--mode", "--save", "--dry-run"},
     "qc": {"--model", "--calib_dir", "--output", "--max_calib"},
-    "mAP": {
+    "eval": {
         "--annotations",
         "--images",
         "--reference-model",
@@ -241,6 +242,7 @@ class Pipeline:
     runtime: str
     precision: str
     needs_calibration: bool
+    task: str = "detect"
 
 
 def load_mapper(repo_root: Path):
@@ -289,6 +291,7 @@ def load_pipelines(path: Path) -> tuple[dict, list[Pipeline]]:
             runtime=str(entry["runtime"]),
             precision=str(entry["precision"]),
             needs_calibration=bool(entry["needs_calibration"]),
+            task=str(entry.get("task", "detect")),
         )
         if pipeline.id in seen:
             raise RegressionError(f"{path}: duplicate pipeline id {pipeline.id}")
@@ -319,11 +322,17 @@ def cross_check_pipelines(
     errors: list[str] = []
     warnings: list[str] = []
     supported = set(mapper.SUPPORTED_RUNTIME_PRECISION_COMBINATIONS)
+    # The mapper imports iqf_registry from the checkout under test, so it is already importable.
+    task_runtimes = sys.modules["iqf_registry"].TASK_RUNTIMES
     for p in pipelines:
         if p.type not in mapper.MODEL_TYPES:
             errors.append(
                 f"{p.id}: model type {p.type} is not in MODEL_TYPES {mapper.MODEL_TYPES}"
             )
+        elif p.task not in mapper.TYPE_TASKS[p.type]:
+            errors.append(f"{p.id}: type {p.type} does not support task {p.task}")
+        elif p.runtime not in task_runtimes[p.task]:
+            errors.append(f"{p.id}: task {p.task} is not available on {p.runtime}")
         if (p.runtime, p.precision) not in supported:
             errors.append(
                 f"{p.id}: {p.runtime}/{p.precision} is not a supported runtime/precision"
@@ -334,12 +343,15 @@ def cross_check_pipelines(
             errors.append(
                 f"{p.id}: needs_calibration={p.needs_calibration} but the product says {expected}"
             )
-    covered = {(p.type, p.runtime, p.precision) for p in pipelines}
-    for model_type in mapper.MODEL_TYPES:
+    covered = {(p.type, p.task, p.runtime, p.precision) for p in pipelines}
+    pairs = [(t, task) for t, tasks in mapper.TYPE_TASKS.items() for task in tasks]
+    for model_type, task in pairs:
         for runtime, precision in sorted(supported):
-            if (model_type, runtime, precision) not in covered:
+            if runtime not in task_runtimes[task]:
+                continue
+            if (model_type, task, runtime, precision) not in covered:
                 warnings.append(
-                    f"coverage drift: {model_type}/{runtime}/{precision} is supported "
+                    f"coverage drift: {model_type}/{task}/{runtime}/{precision} is supported "
                     "but has no pipeline in pipelines.yaml"
                 )
     return errors, warnings
@@ -392,6 +404,31 @@ class Inputs:
     pipeline_extra_flags: dict[str, dict[str, list[str]]]
     timeouts_s: dict[str, int]
     output_dir: Path
+    map_yaml: Path | None = None  # class names for eval; classify only
+    # Per-task inputs for pose / segment / classify, see for_task().
+    task_inputs: dict[str, dict] = field(default_factory=dict)
+
+    def for_task(self, task: str) -> "Inputs":
+        """The inputs a pipeline of this task uses.
+
+        detect uses the top-level models_pt / map / test sections as they are. Any other task
+        takes its model, eval data and test data only from its own `tasks.<task>` section, so a
+        detect annotation file is never passed to a pose or classify run by mistake.
+        """
+        if task == "detect":
+            return self
+        raw = self.task_inputs.get(task) or {}
+        return replace(
+            self,
+            models_pt={task: raw["model_pt"]} if raw.get("model_pt") else {},
+            calib_dir=raw.get("calib_dir") or self.calib_dir,  # optional, else the shared one
+            map_annotations=raw.get("annotations"),
+            map_images=raw.get("images"),
+            map_yaml=raw.get("map_yaml"),
+            test_image=raw.get("test_image"),
+            test_images=raw.get("test_images"),
+            test_yaml=raw.get("test_yaml"),
+        )
 
     def to_dict(self) -> dict:
         def s(p: Path | None) -> str | None:
@@ -414,6 +451,10 @@ class Inputs:
                 "image": s(self.test_image),
                 "images": s(self.test_images),
                 "yaml": s(self.test_yaml),
+            },
+            "tasks": {
+                task: {k: str(v) for k, v in raw.items() if v is not None}
+                for task, raw in self.task_inputs.items()
             },
             "device": {"adb_serial": self.adb_serial},
             "qai_hub": {
@@ -496,6 +537,25 @@ def load_inputs(path: Path, defaults: dict) -> Inputs:
     map_raw = raw.get("map") or {}
     test_raw = raw.get("test") or {}
     device_raw = raw.get("device") or {}
+    task_inputs: dict[str, dict] = {}
+    for task, t_raw in (raw.get("tasks") or {}).items():
+        if task == "detect" or task not in TASKS:
+            raise RegressionError(
+                f"{path}: tasks.{task}: use one of {[t for t in TASKS if t != 'detect']} "
+                "(detect uses the top-level models_pt / map / test sections)"
+            )
+        t_raw = t_raw or {}
+        t_map, t_test = t_raw.get("map") or {}, t_raw.get("test") or {}
+        task_inputs[task] = {
+            "model_pt": _as_path(t_raw.get("model_pt"), repo_root),
+            "calib_dir": _as_path((t_raw.get("calibration") or {}).get("dir"), repo_root),
+            "annotations": _as_path(t_map.get("annotations"), repo_root),
+            "images": _as_path(t_map.get("images"), repo_root),
+            "map_yaml": _as_path(t_map.get("yaml"), repo_root),
+            "test_image": _as_path(t_test.get("image"), repo_root),
+            "test_images": _as_path(t_test.get("images"), repo_root),
+            "test_yaml": _as_path(t_test.get("yaml"), repo_root),
+        }
 
     extra_raw = raw.get("extra_flags") or {}
     extra_flags = {
@@ -545,6 +605,7 @@ def load_inputs(path: Path, defaults: dict) -> Inputs:
         pipeline_extra_flags=pipeline_extra,
         timeouts_s=timeouts,
         output_dir=output_dir,
+        task_inputs=task_inputs,
     )
 
 
@@ -598,7 +659,7 @@ class StagePlan:
     argv: list[str]
     model_from_qc: bool
     uses_adb: bool
-    artifact: Path | None  # qc output file, mAP result txt or test output dir
+    artifact: Path | None  # qc output file, eval result txt or test output dir
     skip_reason: str | None = None
 
 
@@ -607,8 +668,8 @@ def run_layout(run_dir: Path, pipeline: Pipeline, ext: str) -> dict[str, Path]:
     return {
         "qc_dir": base / "qc",
         "qc_artifact": base / "qc" / f"{pipeline.id}{ext}",
-        "map_dir": base / "mAP",
-        "map_result": base / "mAP" / "mAP_result.txt",
+        "map_dir": base / "eval",
+        "map_result": base / "eval" / "eval_result.txt",
         "test_dir": base / "test",
         "test_output": base / "test" / "output",
         "logs": run_dir / "logs" / pipeline.id,
@@ -635,6 +696,7 @@ def build_stage_plans(
 ) -> list[StagePlan]:
     ext = config["artifact_ext"][pipeline.runtime]
     layout = run_layout(run_dir, pipeline, ext)
+    inputs = inputs.for_task(pipeline.task)
     wrapper = ["./docker/iqf", "--image", inputs.docker_image, "run"]
     common = [
         "--type",
@@ -644,8 +706,12 @@ def build_stage_plans(
         "--precision",
         pipeline.precision,
     ]
+    if pipeline.task != "detect":  # detect commands stay exactly as before
+        common += ["--task", pipeline.task]
     model_path, model_from_qc = converted_model_for(inputs, pipeline, layout)
-    pt_model = inputs.models_pt.get(pipeline.type)
+    pt_model = inputs.models_pt.get(
+        pipeline.type if pipeline.task == "detect" else pipeline.task
+    )
     plans: list[StagePlan] = []
 
     # qc
@@ -683,17 +749,23 @@ def build_stage_plans(
         )
     )
 
-    # mAP
-    map_argv = [
-        *wrapper,
-        "mAP",
-        *common,
-        "--annotations",
-        str(inputs.map_annotations)
-        if inputs.map_annotations
-        else "<missing annotations>",
+    # eval
+    map_argv = [*wrapper, "eval", *common]
+    if pipeline.task == "classify":  # class folders + class names, no annotation file
+        map_argv += [
+            "--yaml",
+            str(inputs.map_yaml) if inputs.map_yaml else "<missing class yaml>",
+        ]
+    else:
+        map_argv += [
+            "--annotations",
+            str(inputs.map_annotations)
+            if inputs.map_annotations
+            else "<missing annotations>",
+        ]
+    map_argv += [
         "--images",
-        str(inputs.map_images) if inputs.map_images else "<missing mAP images>",
+        str(inputs.map_images) if inputs.map_images else "<missing eval images>",
         "--reference-model",
         str(pt_model) if pt_model else "<missing .pt>",
         "--converted-model",
@@ -705,17 +777,17 @@ def build_stage_plans(
         map_argv += ["--max-images", str(inputs.map_max_images)]
     if inputs.adb_serial:
         map_argv += ["--adb-serial", inputs.adb_serial]
-    map_argv += _extra_for(inputs, pipeline, "mAP")
+    map_argv += _extra_for(inputs, pipeline, "eval")
     plans.append(
         StagePlan(
             pipeline=pipeline,
-            mode="mAP",
-            selected="mAP" in inputs.modes,
+            mode="eval",
+            selected="eval" in inputs.modes,
             argv=map_argv,
             model_from_qc=model_from_qc,
             uses_adb=True,
             artifact=layout["map_result"],
-            skip_reason=None if "mAP" in inputs.modes else "mAP not selected",
+            skip_reason=None if "eval" in inputs.modes else "eval not selected",
         )
     )
 
@@ -796,7 +868,7 @@ def parse_adb_devices(output: str) -> list[dict[str, str]]:
 
 
 def host_adb_kill_server() -> None:
-    # docs/mAP_mode.md and docs/test_mode.md: a host adb server holding the USB interface hides
+    # docs/eval_mode.md and docs/test_mode.md: a host adb server holding the USB interface hides
     # the device from the container, so release it before every containerized adb stage.
     if shutil.which("adb"):
         run_capture(["adb", "kill-server"], timeout=30)
@@ -875,10 +947,11 @@ def _check_path(path: Path | None, kind: str, label: str, errors: list[str]) -> 
     return True
 
 
-def count_images(directory: Path) -> int:
+def count_images(directory: Path, recursive: bool = False) -> int:
+    """Count pictures in a folder; classify eval data keeps them in one sub-folder per class."""
     return sum(
         1
-        for p in directory.iterdir()
+        for p in (directory.rglob("*") if recursive else directory.iterdir())
         if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES
     )
 
@@ -978,24 +1051,32 @@ def _check_docker(v: _Validation) -> None:
     v.say(f"docker image {v.inputs.docker_image} -> {image_id.strip()[:19]}")
 
 
+def _selected_tasks(v: _Validation) -> list[str]:
+    return [t for t in TASKS if any(p.task == t for p in v.selected)]
+
+
+def _task_label(task: str, section: str) -> str:
+    return section if task == "detect" else f"tasks.{task}.{section}"
+
+
 def _check_models_pt(v: _Validation) -> None:
-    for model_type in sorted({p.type for p in v.selected}):
+    for model_type, task in sorted({(p.type, p.task) for p in v.selected}):
         errs: list[str] = []
-        path = v.inputs.models_pt.get(model_type)
-        if (
-            _check_path(path, "file", f"models_pt.{model_type}", errs)
-            and path.suffix != ".pt"
-        ):
-            errs.append(f"models_pt.{model_type}: expected a .pt file")
-        v.shared_errors[f"pt:{model_type}"] = errs
+        inputs = v.inputs.for_task(task)
+        key = model_type if task == "detect" else task
+        label = f"models_pt.{model_type}" if task == "detect" else f"tasks.{task}.model_pt"
+        path = inputs.models_pt.get(key)
+        if _check_path(path, "file", label, errs) and path.suffix not in (".pt", ".pth"):
+            errs.append(f"{label}: expected a .pt file")
+        v.shared_errors[f"pt:{model_type}:{task}"] = errs
 
 
 def _check_image_dir(
-    v: _Validation, path: Path | None, label: str, key: str
+    v: _Validation, path: Path | None, label: str, key: str, recursive: bool = False
 ) -> list[str]:
     errs: list[str] = []
     if _check_path(path, "dir", label, errs):
-        n = count_images(path)
+        n = count_images(path, recursive)
         v.checks[key] = n
         if n == 0:
             errs.append(f"{label} has no images: {path}")
@@ -1005,65 +1086,106 @@ def _check_image_dir(
 
 
 def _check_calibration(v: _Validation) -> None:
-    errs: list[str] = []
-    if v.wants("qc") and any(p.needs_calibration for p in v.selected):
-        errs = _check_image_dir(
-            v, v.inputs.calib_dir, "calibration.dir", "calibration_images"
-        )
-    v.shared_errors["calib"] = errs
+    for task in _selected_tasks(v):
+        errs: list[str] = []
+        if v.wants("qc") and any(
+            p.needs_calibration and p.task == task for p in v.selected
+        ):
+            label = "calibration.dir" if task == "detect" else f"tasks.{task}.calibration.dir"
+            key = "calibration_images" if task == "detect" else f"calibration_images_{task}"
+            errs = _check_image_dir(v, v.inputs.for_task(task).calib_dir, label, key)
+        v.shared_errors[f"calib:{task}"] = errs
 
 
 def _check_map_inputs(v: _Validation) -> None:
+    for task in _selected_tasks(v):
+        v.shared_errors[f"map:{task}"] = _map_errors(v, task)
+
+
+def _map_errors(v: _Validation, task: str) -> list[str]:
     errs: list[str] = []
-    if v.wants("mAP"):
-        annotations = v.inputs.map_annotations
+    if not v.wants("eval"):
+        return errs
+    inputs = v.inputs.for_task(task)
+    suffix = "" if task == "detect" else f"_{task}"  # keep the detect check keys unchanged
+    if task == "classify":
+        # Classification has no annotation file: class folders plus the class-names yaml.
+        if _check_path(inputs.map_yaml, "file", "tasks.classify.map.yaml", errs):
+            _check_names_yaml(v, inputs.map_yaml, "tasks.classify.map.yaml", errs)
+    else:
+        label = _task_label(task, "map.annotations") if task != "detect" else "map.annotations"
+        annotations = inputs.map_annotations
         if (
-            _check_path(annotations, "file_or_dir", "map.annotations", errs)
+            _check_path(annotations, "file_or_dir", label, errs)
             and annotations.is_file()
             and annotations.suffix == ".json"
         ):
             try:
                 coco = json.loads(annotations.read_text(encoding="utf-8"))
-                v.checks["map_annotation_images"] = len(coco.get("images", []))
-                v.checks["map_annotation_boxes"] = len(coco.get("annotations", []))
-                v.checks["map_annotation_categories"] = len(coco.get("categories", []))
+                v.checks[f"map_annotation_images{suffix}"] = len(coco.get("images", []))
+                v.checks[f"map_annotation_boxes{suffix}"] = len(coco.get("annotations", []))
+                v.checks[f"map_annotation_categories{suffix}"] = len(
+                    coco.get("categories", [])
+                )
                 v.say(
-                    f"map.annotations: {v.checks['map_annotation_images']} images, "
-                    f"{v.checks['map_annotation_boxes']} boxes, "
-                    f"{v.checks['map_annotation_categories']} categories"
+                    f"{label}: {v.checks[f'map_annotation_images{suffix}']} images, "
+                    f"{v.checks[f'map_annotation_boxes{suffix}']} annotations, "
+                    f"{v.checks[f'map_annotation_categories{suffix}']} categories"
                 )
             except (OSError, ValueError) as exc:
-                errs.append(f"map.annotations is not valid JSON: {exc}")
-        errs += _check_image_dir(v, v.inputs.map_images, "map.images", "map_images")
-    v.shared_errors["map"] = errs
+                errs.append(f"{label} is not valid JSON: {exc}")
+    label = "map.images" if task == "detect" else f"tasks.{task}.map.images"
+    errs += _check_image_dir(
+        v, inputs.map_images, label, f"map_images{suffix}", recursive=task == "classify"
+    )
+    return errs
+
+
+def _check_names_yaml(v: _Validation, path: Path, label: str, errs: list[str]) -> None:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        names = data.get("names") if isinstance(data, dict) else None
+        if not names:
+            errs.append(f"{label} has no 'names': {path}")
+        else:
+            v.say(f"{label}: {len(names)} classes in {path}")
+    except (OSError, yaml.YAMLError) as exc:
+        errs.append(f"{label} is not valid YAML: {exc}")
 
 
 def _check_test_inputs(v: _Validation) -> None:
+    for task in _selected_tasks(v):
+        v.shared_errors[f"test:{task}"] = _test_errors(v, task)
+
+
+def _test_errors(v: _Validation, task: str) -> list[str]:
     errs: list[str] = []
     if v.wants("test"):
-        inputs = v.inputs
+        inputs = v.inputs.for_task(task)
+        pre = "test" if task == "detect" else f"tasks.{task}.test"
+        suffix = "" if task == "detect" else f"_{task}"
         if bool(inputs.test_image) == bool(inputs.test_images):
-            errs.append("test: set exactly one of test.image or test.images")
+            errs.append(f"{pre}: set exactly one of {pre}.image or {pre}.images")
         elif inputs.test_image:
-            _check_path(inputs.test_image, "file", "test.image", errs)
+            _check_path(inputs.test_image, "file", f"{pre}.image", errs)
         else:
             errs += _check_image_dir(
-                v, inputs.test_images, "test.images", "test_images"
+                v, inputs.test_images, f"{pre}.images", f"test_images{suffix}"
             )
-        if _check_path(inputs.test_yaml, "file", "test.yaml", errs):
+        if _check_path(inputs.test_yaml, "file", f"{pre}.yaml", errs):
             try:
                 data = (
                     yaml.safe_load(inputs.test_yaml.read_text(encoding="utf-8")) or {}
                 )
                 names = data.get("names") if isinstance(data, dict) else None
                 if not names:
-                    errs.append(f"test.yaml has no 'names': {inputs.test_yaml}")
+                    errs.append(f"{pre}.yaml has no 'names': {inputs.test_yaml}")
                 else:
-                    v.checks["test_yaml_classes"] = len(names)
-                    v.say(f"test.yaml: {len(names)} classes in {inputs.test_yaml}")
+                    v.checks[f"test_yaml_classes{suffix}"] = len(names)
+                    v.say(f"{pre}.yaml: {len(names)} classes in {inputs.test_yaml}")
             except (OSError, yaml.YAMLError) as exc:
-                errs.append(f"test.yaml is not valid YAML: {exc}")
-    v.shared_errors["test"] = errs
+                errs.append(f"{pre}.yaml is not valid YAML: {exc}")
+    return errs
 
 
 def _check_qai_hub(v: _Validation, skip_hub_check: bool) -> None:
@@ -1128,7 +1250,7 @@ def _list_adb_devices(v: _Validation) -> tuple[list[dict[str, str]], str]:
 def _check_device(v: _Validation) -> None:
     errs: list[str] = []
     v.shared_errors["device"] = errs
-    if not (v.wants("mAP") or v.wants("test")):
+    if not (v.wants("eval") or v.wants("test")):
         return
     devices, source = _list_adb_devices(v)
     v.checks["adb_devices"] = devices
@@ -1176,15 +1298,15 @@ def _check_device(v: _Validation) -> None:
 
 def _stage_errors(v: _Validation, p: Pipeline) -> dict[str, list[str]]:
     shared = v.shared_errors
-    pt = shared.get(f"pt:{p.type}", [])
+    pt = shared.get(f"pt:{p.type}:{p.task}", [])
     errors = {
         "qc": [
             *pt,
-            *(shared["calib"] if p.needs_calibration else []),
+            *(shared[f"calib:{p.task}"] if p.needs_calibration else []),
             *shared["hub_ini"],
         ],
-        "mAP": [*pt, *shared["map"], *shared["device"]],
-        "test": [*shared["test"], *shared["device"]],
+        "eval": [*pt, *shared[f"map:{p.task}"], *shared["device"]],
+        "test": [*shared[f"test:{p.task}"], *shared["device"]],
     }
     if v.config["qc_backend"][p.runtime] == "qai_hub":
         errors["qc"] += shared["hub_login"]
@@ -1198,11 +1320,11 @@ def _stage_errors(v: _Validation, p: Pipeline) -> dict[str, list[str]]:
             errs.append(
                 f"prebuilt_models.{p.id}: expected a {ext} file for {p.runtime}"
             )
-        errors["mAP"] += errs
+        errors["eval"] += errs
         errors["test"] += errs
     elif not v.wants("qc"):
         msg = "qc is not selected and no prebuilt converted model was supplied"
-        errors["mAP"].append(msg)
+        errors["eval"].append(msg)
         errors["test"].append(msg)
     return {mode: list(dict.fromkeys(errs)) for mode, errs in errors.items()}
 
@@ -1478,6 +1600,18 @@ def parse_map_result(path: Path) -> dict[str, object]:
     pct = metrics["pct_delta_vs_reference"]
     match = re.match(r"^([+-]?\d+(?:\.\d+)?)%$", str(pct or ""))
     metrics["pct_delta_value"] = float(match.group(1)) if match else None
+    if "reference_top1" in values:  # classify reports top-1 / top-5 accuracy instead of mAP
+        ref1, conv1 = float(values["reference_top1"]), float(values["converted_top1"])
+        metrics.update(
+            reference_top1=ref1,
+            converted_top1=conv1,
+            converted_top5=float(values["converted_top5"]) if "converted_top5" in values else None,
+            top1_agreement=values.get("top1_agreement_reference_vs_converted"),
+        )
+        if ref1 > 0:  # same relative-drop rule as mAP
+            delta = (conv1 - ref1) / ref1 * 100.0
+            metrics["pct_delta_vs_reference"] = f"{delta:+.2f}%"
+            metrics["pct_delta_value"] = delta
     return metrics
 
 
@@ -1551,21 +1685,22 @@ def evaluate_stage(
         elif result["status"] == PASS:
             result["status"] = FAIL
             result["notes"].append(f"exit 0 but qc artifact missing: {artifact}")
-    elif mode == "mAP":
+    elif mode == "eval":
         if artifact.is_file():
             metrics = parse_map_result(artifact)
             result["metrics"] = metrics
             if result["status"] == PASS:
-                if (
-                    metrics["reference_map50"] is None
-                    or metrics["converted_map50"] is None
-                ):
+                has_score = (
+                    metrics["reference_map50"] is not None
+                    and metrics["converted_map50"] is not None
+                ) or metrics.get("converted_top1") is not None
+                if not has_score:
                     result["status"] = FAIL
                     result["notes"].append(
-                        "mAP result file has no reference/converted mAP50"
+                        "eval result file has no reference/converted mAP50 or top-1"
                     )
                 else:
-                    threshold = (config["defaults"].get("mAP") or {}).get(
+                    threshold = (config["defaults"].get("eval") or {}).get(
                         "warn_if_pct_delta_below"
                     )
                     pct = metrics.get("pct_delta_value")
@@ -1575,11 +1710,11 @@ def evaluate_stage(
                         and pct < float(threshold)
                     ):
                         result["warnings"].append(
-                            f"converted mAP50 is {pct:+.2f}% vs reference (threshold {float(threshold):+.2f}%)"
+                            f"converted score is {pct:+.2f}% vs reference (threshold {float(threshold):+.2f}%)"
                         )
         elif result["status"] == PASS:
             result["status"] = FAIL
-            result["notes"].append(f"exit 0 but mAP result file missing: {artifact}")
+            result["notes"].append(f"exit 0 but eval result file missing: {artifact}")
     elif mode == "test":
         metrics = parse_test_log(log_text)
         if artifact.is_dir():
@@ -1660,7 +1795,12 @@ def key_result(mode: str, stage: dict) -> str:
         if metrics.get("sidecar_files"):
             text += f" + {', '.join(metrics['sidecar_files'])}"
         return text
-    if mode == "mAP" and metrics.get("converted_map50") is not None:
+    if mode == "eval" and metrics.get("converted_top1") is not None:
+        return (
+            f"top-1 ref {metrics['reference_top1']:.4f} -> conv {metrics['converted_top1']:.4f} "
+            f"({metrics.get('pct_delta_vs_reference')}, {metrics.get('num_images')} imgs)"
+        )
+    if mode == "eval" and metrics.get("converted_map50") is not None:
         ref = metrics.get("reference_map50")
         conv = metrics.get("converted_map50")
         return (
@@ -1716,7 +1856,7 @@ def render_report(results: dict) -> str:
             ]
         )
     lines.append(
-        md_table(["No", "Pipeline", "qc", "mAP", "test", "Overall"], summary_rows)
+        md_table(["No", "Pipeline", "qc", "eval", "test", "Overall"], summary_rows)
     )
     lines.append("")
     lines.append(
@@ -1845,6 +1985,7 @@ def cmd_list(args) -> int:
             p.runtime,
             p.precision,
             "yes" if p.needs_calibration else "no",
+            p.task,
             config["qc_backend"][p.runtime],
             config["artifact_ext"][p.runtime],
         ]
@@ -1859,6 +2000,7 @@ def cmd_list(args) -> int:
                 "RUNTIME",
                 "PRECISION",
                 "CALIB",
+                "TASK",
                 "QC BACKEND",
                 "ARTIFACT",
             ],
@@ -2210,6 +2352,7 @@ def _new_results(
                 "num": p.num,
                 "id": p.id,
                 "type": p.type,
+                "task": p.task,
                 "runtime": p.runtime,
                 "precision": p.precision,
                 "stages": {m: {"status": PENDING} for m in MODES},

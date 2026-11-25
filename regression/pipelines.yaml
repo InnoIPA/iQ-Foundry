@@ -17,13 +17,15 @@
 # A pipeline is one (model type, runtime, precision) combination, exercised end to end
 # through the documented Docker wrapper in this order:
 #     qc   (.pt -> converted model, host)
-#     mAP  (reference .pt vs converted model, converted model runs on the device via adb)
+#     eval (reference .pt vs converted model, converted model runs on the device via adb)
 #     test (converted model inference on the device via adb)
 #
 # The runner cross-checks this file against docker/iqf_path_mapper.py:
 #   - every (runtime, precision) must be in SUPPORTED_RUNTIME_PRECISION_COMBINATIONS
 #   - needs_calibration must equal qc_requires_calibration(runtime, precision)
 #   - supported combinations missing from this file are reported as coverage drift
+# `task` is optional and defaults to detect (the first 21 pipelines). pose, segment and classify
+# pipelines carry it, and their ids include the task (resnet50 is classify only).
 # Add a pipeline here when the product gains a new type/runtime/precision.
 #
 # `num` is the pipeline's short numeric ID. Users pick pipelines by this number (e.g. 1, 5, 15
@@ -34,13 +36,13 @@ schema_version: 1
 
 defaults:
   # Modes run in this order for every pipeline unless the inputs file narrows them.
-  modes: [qc, mAP, test]
+  modes: [qc, eval, test]
   # Per-mode wall-clock limit in seconds. A stage over its limit is killed and marked TIMEOUT.
   timeouts_s:
     qc: 3600
-    mAP: 5400
+    eval: 5400
     test: 1800
-  mAP:
+  eval:
     # A converted mAP50 more than this many percent below the reference is PASS_WITH_WARNINGS.
     # It never turns a stage into FAIL; the regression only reports numbers.
     warn_if_pct_delta_below: -10.0
@@ -87,3 +89,27 @@ pipelines:
   - {num: 19, id: yolov26-qairt-int8, type: yolov26, runtime: qairt, precision: int8, needs_calibration: true}
   - {num: 20, id: yolov26-qairt-w8a16, type: yolov26, runtime: qairt, precision: w8a16, needs_calibration: true}
   - {num: 21, id: yolov26-qairt-fp16, type: yolov26, runtime: qairt, precision: fp16, needs_calibration: false}
+  # --- yolov26 pose ---
+  - {num: 22, id: yolov26-pose-litert-int8, type: yolov26, task: pose, runtime: litert, precision: int8, needs_calibration: true}
+  - {num: 23, id: yolov26-pose-litert-fp32, type: yolov26, task: pose, runtime: litert, precision: fp32, needs_calibration: false}
+  - {num: 24, id: yolov26-pose-onnx-fp32, type: yolov26, task: pose, runtime: onnx, precision: fp32, needs_calibration: false}
+  - {num: 25, id: yolov26-pose-onnx-w8a16, type: yolov26, task: pose, runtime: onnx, precision: w8a16, needs_calibration: true}
+  - {num: 26, id: yolov26-pose-qairt-int8, type: yolov26, task: pose, runtime: qairt, precision: int8, needs_calibration: true}
+  - {num: 27, id: yolov26-pose-qairt-w8a16, type: yolov26, task: pose, runtime: qairt, precision: w8a16, needs_calibration: true}
+  - {num: 28, id: yolov26-pose-qairt-fp16, type: yolov26, task: pose, runtime: qairt, precision: fp16, needs_calibration: false}
+  # --- yolov26 segment ---
+  - {num: 29, id: yolov26-segment-litert-int8, type: yolov26, task: segment, runtime: litert, precision: int8, needs_calibration: true}
+  - {num: 30, id: yolov26-segment-litert-fp32, type: yolov26, task: segment, runtime: litert, precision: fp32, needs_calibration: false}
+  - {num: 31, id: yolov26-segment-onnx-fp32, type: yolov26, task: segment, runtime: onnx, precision: fp32, needs_calibration: false}
+  - {num: 32, id: yolov26-segment-onnx-w8a16, type: yolov26, task: segment, runtime: onnx, precision: w8a16, needs_calibration: true}
+  - {num: 33, id: yolov26-segment-qairt-int8, type: yolov26, task: segment, runtime: qairt, precision: int8, needs_calibration: true}
+  - {num: 34, id: yolov26-segment-qairt-w8a16, type: yolov26, task: segment, runtime: qairt, precision: w8a16, needs_calibration: true}
+  - {num: 35, id: yolov26-segment-qairt-fp16, type: yolov26, task: segment, runtime: qairt, precision: fp16, needs_calibration: false}
+  # --- resnet50 classify ---
+  - {num: 36, id: resnet50-litert-int8, type: resnet50, task: classify, runtime: litert, precision: int8, needs_calibration: true}
+  - {num: 37, id: resnet50-litert-fp32, type: resnet50, task: classify, runtime: litert, precision: fp32, needs_calibration: false}
+  - {num: 38, id: resnet50-onnx-fp32, type: resnet50, task: classify, runtime: onnx, precision: fp32, needs_calibration: false}
+  - {num: 39, id: resnet50-onnx-w8a16, type: resnet50, task: classify, runtime: onnx, precision: w8a16, needs_calibration: true}
+  - {num: 40, id: resnet50-qairt-int8, type: resnet50, task: classify, runtime: qairt, precision: int8, needs_calibration: true}
+  - {num: 41, id: resnet50-qairt-w8a16, type: resnet50, task: classify, runtime: qairt, precision: w8a16, needs_calibration: true}
+  - {num: 42, id: resnet50-qairt-fp16, type: resnet50, task: classify, runtime: qairt, precision: fp16, needs_calibration: false}
