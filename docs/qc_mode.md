@@ -1,6 +1,6 @@
 # QC Mode
 
-`qc` mode prepares a supported YOLO `.pt` model for deployment by converting it into a runtime-
+`qc` mode prepares a supported `.pt` model (a YOLO model for detection, pose or segmentation, or a ResNet50 classifier) for deployment by converting it into a runtime-
 specific artifact for EXMP-Q911 (Qualcomm QCS9075). Depending on `--runtime` and `--precision`, the
 output is a LiteRT `.tflite` model, an ONNX `.onnx` model, or a QAIRT `.bin` HTP context binary.
 
@@ -120,10 +120,11 @@ QAIRT FP16 (no calibration):
 `qc` requires the following:
 
 - the wrapper subcommand `./docker/iqf run qc`
-- `--type` with one of `yolov10`, `yolov11`, or `yolov26`
+- `--type` with one of `yolov10`, `yolov11`, `yolov26`, or `resnet50`
+- `--task` for `pose` and `segment` (the default is `detect`; `resnet50` uses `classify`)
 - `--runtime` with one of `litert`, `onnx`, or `qairt`
 - `--precision` with one of `fp32`, `int8`, `w8a16`, or `fp16`
-- `--model` pointing to a supported FP `.pt` model
+- `--model` pointing to a supported FP `.pt` model, see [Model Requirements](#model-requirements)
 - `--calib_dir` only for `litert/int8`, `onnx/w8a16`, `qairt/int8`, and `qairt/w8a16`
 
 When you use the wrapper, pass the path flags directly or save them first through
@@ -135,20 +136,47 @@ For `litert/fp32`, `onnx/fp32`, and `qairt/fp16`, calibration is not part of the
 - `--max_calib` is ignored if supplied
 - `--qc-quant-scheme` is ignored if supplied
 
+## Model Requirements
+
+**YOLO (`yolov10`, `yolov11`, `yolov26`):** the `.pt` file is an Ultralytics model of the matching
+version. Pose and segmentation models (`yolo26n-pose.pt`, `yolo26n-seg.pt`) work only with
+`--type yolov26`, and you must give `--task pose` or `--task segment`. Without `--task`, a pose or
+segmentation `.pt` is converted as a detection-only model and the keypoints or masks are lost.
+
+**ResNet50 (`resnet50`):** the `.pt` or `.pth` file must follow these rules.
+
+- **Architecture:** torchvision `resnet50`, unchanged. The number of classes is read from the last
+  layer (`fc`), so a model with your own number of classes works.
+- **File content:** the `state_dict` only (weights saved with `torch.save(model.state_dict(), ...)`),
+  not a whole pickled model.
+- **Output:** raw class scores (logits). Do not add a softmax.
+- **Input size:** 224 × 224. This is fixed.
+- **Normalization:** train with the ImageNet mean `(0.485, 0.456, 0.406)` and standard deviation
+  `(0.229, 0.224, 0.225)`, the torchvision default. A different normalization does not cause an
+  error. The accuracy only drops.
+- **Do not add the normalization to your model.** `qc` puts the mean and standard deviation in front
+  of the converted model, so the board feeds plain 0-255 pixels, the same as for YOLO.
+- **Picture preparation:** `eval`, `test` and the calibration pictures all use the same steps:
+  RGB, resize the short side to 256, center-crop 224 × 224, divide by 255. If you trained with
+  a different resize, the accuracy drops in the same way.
+
 ## Output
 
 By default, `qc` writes the generated artifact to:
 
 ```text
-out/model/<type>/<type>_<runtime>_<precision>_<timestamp>.<tflite|onnx>
+out/model/<task>/<type>/<type>[_<task>]_<runtime>_<precision>_<timestamp>.<tflite|onnx>
 ```
+
+`<task>` is `detect`, `pose`, `segment` or `classify`. `_<task>` is left out for `detect`. For the other tasks the file name carries the task, for example `yolov26_pose_litert_int8_<timestamp>.tflite`.
 
 Examples:
 
-- `out/model/yolov26/yolov26_litert_int8_<timestamp>.tflite`
-- `out/model/yolov26/yolov26_litert_fp32_<timestamp>.tflite`
-- `out/model/yolov26/yolov26_onnx_fp32_<timestamp>.onnx`
-- `out/model/yolov26/yolov26_onnx_w8a16_<timestamp>.onnx`
+- `out/model/detect/yolov26/yolov26_litert_int8_<timestamp>.tflite`
+- `out/model/detect/yolov26/yolov26_litert_fp32_<timestamp>.tflite`
+- `out/model/detect/yolov26/yolov26_onnx_fp32_<timestamp>.onnx`
+- `out/model/detect/yolov26/yolov26_onnx_w8a16_<timestamp>.onnx`
+- `out/model/classify/resnet50/resnet50_classify_onnx_w8a16_<timestamp>.onnx`
 
 Use `--output` to override the default location.
 
@@ -171,20 +199,23 @@ For ONNX outputs, if QAI Hub returns a bundled ONNX artifact, iQ-Foundry extract
 
 | Flag | Purpose | Options | Default |
 | --- | --- | --- | --- |
-| `--type` | Select the model family. | `yolov10`, `yolov11`, `yolov26` | Required |
+| `--type` | Select the model family. | `yolov10`, `yolov11`, `yolov26`, `resnet50` | Required |
+| `--task` | Select the task. Required for pose and segmentation. | `detect`, `pose`, `segment`, `classify` | `detect`, or `classify` for `resnet50` |
 | `--runtime` | Select the deployment runtime. | `litert`, `onnx`, `qairt` | Required |
 | `--precision` | Select the deployment precision. | `fp32`, `int8`, `w8a16`, `fp16` | Required |
 | `--model` | Path to the FP `.pt` model. | filesystem path | Required |
 | `--calib_dir` | Calibration image directory. Required for `litert/int8`, `onnx/w8a16`, `qairt/int8`, and `qairt/w8a16`; ignored for `litert/fp32`, `onnx/fp32`, and `qairt/fp16`. | filesystem path | runtime-dependent |
-| `--output` | Override the output model path. | filesystem path | `out/model/<type>/<type>_<runtime>_<precision>_<timestamp>.<tflite|onnx|bin>` |
+| `--output` | Override the output model path. | filesystem path | `out/model/<task>/<type>/<type>[_<task>]_<runtime>_<precision>_<timestamp>.<tflite|onnx|bin>` |
 | `--max_calib` | Maximum calibration images used for quantized conversion. Ignored for FP32 flows. | integer | `200` |
 | `--qc-head` | Override the export head for supported models. | `one2many`, `one2one` | `one2many` for `yolov10` and `yolov26`; ignored for `yolov11`, which uses `default` |
-| `--qc-quant-scheme` | Override the quantization scheme for quantized conversion. Ignored for FP32 flows. | `mse`, `minmax` | `mse` for `yolov10`, `minmax` for `yolov11`, `mse` for `yolov26` |
+| `--qc-quant-scheme` | Override the quantization scheme for quantized conversion. Ignored for FP32 flows. | `mse`, `minmax` | `mse` for `yolov10`, `minmax` for `yolov11`, `mse` for `yolov26` and `resnet50` |
 
 
 ## Notes
 
+- `resnet50` has no export head, so `--qc-head` is rejected for it.
+- Calibration pictures should look like the data the model will see. For ResNet50, use pictures of the same kind as your classes, not unrelated ones.
 - `litert/fp32`, `onnx/fp32`, and `qairt/fp16` do not require calibration data in configure flow or one-shot usage.
 - `yolov11` always uses its default export head and ignores `--qc-head`.
-- For `yolov10` and `yolov26`, keep `--qc-head` aligned with the branch you intend to evaluate later in `mAP`.
+- For `yolov10` and `yolov26`, keep `--qc-head` aligned with the branch you intend to evaluate later in `eval`.
 - Saved wrapper paths are scoped by `type`, `mode`, `runtime`, and `precision`, so LiteRT, ONNX, and QAIRT entries do not overwrite each other.

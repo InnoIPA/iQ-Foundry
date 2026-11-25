@@ -7,13 +7,16 @@
 > [!IMPORTANT]
 > This is the canonical setup guide for a Windows 11 host.
 
+> [!NOTE]
+> This guide covers the object detection task only (`--task detect`, the default).
+
 ## Prerequisites
 
 | Category | Requirement |
 | --- | --- |
 | Host platform | x86 Windows 11 |
 | Memory | Recommended minimum 16 GB RAM |
-| Target for `mAP` and host-side `test` | EXMP-Q911 (Qualcomm QCS9075) |
+| Target for `eval` and host-side `test` | EXMP-Q911 (Qualcomm QCS9075) |
 | ADB connection | USB-C cable between the host and EXMP-Q911 |
 | QAI Hub access | [Qualcomm AI Hub](https://aihub.qualcomm.com/) API token (required for `litert` and `onnx` only; `qairt` converts offline) |
 
@@ -21,7 +24,7 @@
 
 ### STEP 1: Connect the Device
 
-Connect the host to EXMP-Q911 with USB-C before using `mAP` or host-side `test`.
+Connect the host to EXMP-Q911 with USB-C before using `eval` or host-side `test`.
 
 <p align="center">
   <img src="./docs/Images/usb-c-target-connection.png" alt="Host to target USB-C connection" width="720">
@@ -108,20 +111,20 @@ Authenticate through the helper script from WSL:
 
 This stores the host-side QAI Hub configuration in `~/.qai_hub/client.ini` inside WSL.
 
-After these steps, the Windows host is ready for `qc`, `mAP`, and host-side `test`.
+After these steps, the Windows host is ready for `qc`, `eval`, and host-side `test`.
 
 ## Quick Start
 
 > [!TIP]
 > **🤖 Using a coding agent?** If you use Claude Code, Codex or any other coding agent, you can run
 > iQ-Foundry by chatting with the agent through the `iqf-assistant` skill. It checks your setup
-> and runs `qc`, `mAP` and `test` for you. Start the agent inside the WSL Ubuntu terminal, then
+> and runs `qc`, `eval` and `test` for you. Start the agent inside the WSL Ubuntu terminal, then
 > type `/iqf-assistant` or just ask, for example *"convert my model for the board"*. See
 > [iQ-Foundry Assistant](docs/iqf_assistant.md).
 
 `iQ-Foundry` supports two ways to run each mode:
 
-- [Configure Flow](#configure-flow): simple, repeatable wrapper commands for each mode. Save the required host paths in `.iqf/docker-paths.json`, then run the mode with shorter commands. For a guided walkthrough of the repeated-flow experience, see the [iQ-Studio YOLO26 tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).
+- [Configure Flow](#configure-flow): simple, repeatable wrapper commands for each mode. Save the required host paths in `.iqf/docker-paths.json`, then run the mode with shorter commands. For a guided walkthrough of the repeated-flow experience, see the [iQ-Studio YOLO26 tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/detect/README.md).
 - [One-Shot Commands](#one-shot-commands): full wrapper usage with more explicit control. Pass the required host paths and any extra flags directly in the command.
 
 Use `Configure Flow` when you want an easier repeated workflow. Use `One-Shot Commands` when you
@@ -134,7 +137,7 @@ mode later with shorter commands.
 
 If you want a simpler guided setup for configure flow, start with the
 [iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main) tutorial:
-[YOLO26 Configure Flow Tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).
+[YOLO26 Configure Flow Tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/detect/README.md).
 
 The examples below use `yolov26` with `--runtime litert --precision int8`. You can also use
 `--type yolov10` or `--type yolov11`, and swap in any supported runtime/precision pair:
@@ -158,33 +161,33 @@ Run the mode:
 ./docker/iqf run qc --type yolov26 --runtime litert --precision int8
 ```
 
-Output location: `out/model/yolov26/yolov26_litert_int8_<timestamp>.tflite`
+Output location: `out/model/detect/yolov26/yolov26_litert_int8_<timestamp>.tflite`
 
-### mAP
+### eval
 
-Use `mAP` to compare source versus converted model quality at `mAP@0.5`. The source model runs on
+Use `eval` to compare source versus converted model quality at `mAP@0.5`. The source model runs on
 the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through ADB.
 
 Configure the required paths: annotations path, image directory, reference model path, and
 converted model path.
 
 ```bash
-./docker/iqf configure mAP --type yolov26 --runtime litert --precision int8
+./docker/iqf configure eval --type yolov26 --runtime litert --precision int8
 ```
 
 Run the mode:
 
 ```bash
-./docker/iqf run mAP --type yolov26 --runtime litert --precision int8
+./docker/iqf run eval --type yolov26 --runtime litert --precision int8
 ```
 
 For a smaller validation run, you can limit the number of images:
 
 ```bash
-./docker/iqf run mAP --type yolov26 --runtime litert --precision int8 --max-images 5
+./docker/iqf run eval --type yolov26 --runtime litert --precision int8 --max-images 5
 ```
 
-Output location: `out/mAP_results/yolov26/yolov26_mAP_result_litert_int8_<timestamp>.txt`
+Output location: `out/eval_results/detect/yolov26/yolov26_eval_result_litert_int8_<timestamp>.txt`
 
 ### Test
 
@@ -203,7 +206,7 @@ Run the mode:
 ./docker/iqf run test --type yolov26 --runtime litert --precision int8 --adb
 ```
 
-Output location: `out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`
+Output location: `out/test/detect/yolov26/yolov26_inference_litert_int8_<timestamp>/`
 
 > NOTE:
 > `test` in configure flow commands uses ADB-based host execution. Direct on-device inference is
@@ -233,17 +236,17 @@ Use `qc` to convert a supported FP `.pt` model into a deployment-ready artifact 
 ```
 
 By default, this writes the compiled model to
-`out/model/yolov26/yolov26_litert_int8_<timestamp>.tflite`.
+`out/model/detect/yolov26/yolov26_litert_int8_<timestamp>.tflite`.
 
 For advanced `qc` options, see [docs/qc_mode.md](./docs/qc_mode.md).
 
-### mAP Mode
+### eval Mode
 
-Use `mAP` to compare source versus converted model quality at `mAP@0.5`. The source model runs on
+Use `eval` to compare source versus converted model quality at `mAP@0.5`. The source model runs on
 the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through ADB.
 
 ```bash
-./docker/iqf run mAP \
+./docker/iqf run eval \
   --type yolov26 \
   --runtime litert \
   --precision int8 \
@@ -257,12 +260,12 @@ the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through A
 separate YOLO `.txt` labels or VOC `.xml` labels for each image in the images directory.
 
 By default, this writes the report to
-`out/mAP_results/yolov26/yolov26_mAP_result_litert_int8_<timestamp>.txt`.
+`out/eval_results/detect/yolov26/yolov26_eval_result_litert_int8_<timestamp>.txt`.
 
 For `yolov10` and `yolov26`, if the converted model was generated with `--qc-head one2one`, run
-`mAP` with `--fp-head one2one` so the FP branch matches the converted model.
+`eval` with `--fp-head one2one` so the FP branch matches the converted model.
 
-For advanced `mAP` options, see [docs/mAP_mode.md](./docs/mAP_mode.md).
+For advanced `eval` options, see [docs/eval_mode.md](./docs/eval_mode.md).
 
 ### Test Mode
 
@@ -281,7 +284,7 @@ runs from the host through ADB.
 ```
 
 By default, this writes annotated images, detection `.txt` files, and `classes.txt` to
-`out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`.
+`out/test/detect/yolov26/yolov26_inference_litert_int8_<timestamp>/`.
 
 Use `--output` to override the default test output directory.
 
@@ -292,7 +295,7 @@ For advanced `test` options, see [docs/test_mode.md](./docs/test_mode.md).
 Use the mode documents for advanced options and mode-specific notes:
 
 - [./docs/qc_mode.md](./docs/qc_mode.md)
-- [./docs/mAP_mode.md](./docs/mAP_mode.md)
+- [./docs/eval_mode.md](./docs/eval_mode.md)
 - [./docs/test_mode.md](./docs/test_mode.md)
 
 ## Notes

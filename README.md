@@ -20,9 +20,9 @@
   🤖 <a href="./docs/iqf_assistant.md">Use iQ-Foundry with your coding agent</a>
 </p>
 
-`iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible computer vision `.pt` models into `.tflite`, `.onnx`, and QAIRT `.bin` HTP context binary artifacts, validating reference-versus-converted quality with mAP@0.5, and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
+`iQ-Foundry` helps prepare computer vision models for innodisk Qualcomm solution. The current workflow supports compiling compatible computer vision `.pt` models into `.tflite`, `.onnx`, and QAIRT `.bin` HTP context binary artifacts, validating reference-versus-converted quality (mAP@0.5 for detection, keypoint and mask mAP for pose and segmentation, top-1 / top-5 accuracy for classification), and running on-device inference on [EXMP-Q911 (Qualcomm QCS9075)](https://www.innodisk.com/en/products/computing/qualcomm-solution/exec-q911).
 
-`iQ-Foundry` supports a Bring Your Own Model workflow. You can use your own compatible `yolov10`, `yolov11`, or `yolov26`  models with the pipeline. If you need pretrained YOLO weights, you can download official pretrained models from [Ultralytics](https://docs.ultralytics.com/).
+`iQ-Foundry` supports a Bring Your Own Model workflow. You can use your own compatible `yolov10`, `yolov11`, or `yolov26` models (detection, plus pose and segmentation for `yolov26`) or `resnet50` classification models with the pipeline. If you need pretrained YOLO weights, you can download official pretrained models from [Ultralytics](https://docs.ultralytics.com/).
 
 > **Note:** `iQ-Foundry` is focused on computer vision model conversion, optimization, and deployment. For more comprehensive deployment information related to hardware and applications, see [iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main).
 
@@ -30,7 +30,7 @@
 
 1. Choose your host workflow: Ubuntu 22.04 or Windows 11.
 2. Run `qc` to generate the quantized and compiled model.
-3. Run `mAP` to compare source and converted model quality on the same dataset.
+3. Run `eval` to compare source and converted model quality on the same dataset.
 4. Run `test` for on-device inference, either from the host through ADB or directly on the target.
 
 <p align="center">
@@ -82,9 +82,9 @@
         <td>Convert a supported model into a deployment-ready artifact for validation and device execution.</td>
       </tr>
       <tr>
-        <td><code>mAP</code></td>
+        <td><code>eval</code></td>
         <td>Evaluate Converted Model Quality</td>
-        <td>Measure detection quality so you can compare the original model against the converted result.</td>
+        <td>Measure model quality (detection, pose, segmentation or classification) so you can compare the original model against the converted result.</td>
       </tr>
       <tr>
         <td><code>test</code></td>
@@ -112,7 +112,11 @@
       </tr>
       <tr>
         <td>Model Families</td>
-        <td><code>yolov10</code>, <code>yolov11</code>, <code>yolov26</code></td>
+        <td><code>yolov10</code>, <code>yolov11</code>, <code>yolov26</code>, <code>resnet50</code></td>
+      </tr>
+      <tr>
+        <td>Tasks</td>
+        <td><code>detect</code> (<code>yolov10</code>, <code>yolov11</code>, <code>yolov26</code>), <code>pose</code> and <code>segment</code> (<code>yolov26</code>), <code>classify</code> (<code>resnet50</code>)</td>
       </tr>
       <tr>
         <td>Quantization</td>
@@ -244,7 +248,7 @@
       </tr>
       <tr>
         <td><a href="./docs/iqf_assistant.md"><code>docs/iqf_assistant.md</code></a></td>
-        <td>Guide to the <code>iqf-assistant</code> agent skill, which runs <code>qc</code>, <code>mAP</code> and <code>test</code> for you through a chat with Claude Code or Codex.</td>
+        <td>Guide to the <code>iqf-assistant</code> agent skill, which runs <code>qc</code>, <code>eval</code> and <code>test</code> for you through a chat with Claude Code or Codex.</td>
         <td>You prefer chatting with a coding agent over typing commands, or you are new to iQ-Foundry.</td>
       </tr>
       <tr>

@@ -4,9 +4,8 @@ This guide is for users who have a vision model that is **not directly supported
 
 Currently, iQ-Foundry has direct flows for:
 
-- YOLOv10
-- YOLOv11
-- YOLOv26
+- YOLOv10, YOLOv11 and YOLOv26 (object detection; YOLOv26 also supports pose estimation and instance segmentation)
+- ResNet50 (image classification)
 
 For other vision models, use **Qualcomm AI Hub Workbench** to convert and validate the model
 before integrating it into your application flow.
@@ -52,14 +51,14 @@ Target:
 
 Use this guide for models such as:
 
-- image classification models
+- image classification models other than ResNet50
 - object detection models
 - semantic segmentation models
 - instance segmentation models
-- YOLO models not currently supported by iQ-Foundry
+- YOLO models or tasks not currently supported by iQ-Foundry
 - custom PyTorch or ONNX vision models
 
-Do not force an unsupported model into the existing iQ-Foundry YOLOv10 / YOLOv11 / YOLOv26 flow.
+Do not force an unsupported model into the existing iQ-Foundry YOLOv10 / YOLOv11 / YOLOv26 / ResNet50 flows.
 
 ---
 ## Step 1: Install and Log In to Qualcomm AI Hub

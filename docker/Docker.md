@@ -103,5 +103,5 @@ After the image is built, continue with the host workflow guides:
 For mode-specific usage and advanced flags, see:
 
 - [docs/qc_mode.md](../docs/qc_mode.md)
-- [docs/mAP_mode.md](../docs/mAP_mode.md)
+- [docs/eval_mode.md](../docs/eval_mode.md)
 - [docs/test_mode.md](../docs/test_mode.md)

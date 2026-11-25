@@ -2,8 +2,8 @@
 
 `test` mode runs a converted LiteRT, ONNX or QAIRT model on sample images and writes visual plus text
 outputs for quick inspection. Use this mode after model conversion and quality validation to
-confirm that detections look correct on real input images and that on-device behavior matches
-expectations.
+confirm that the results (detections, keypoints, masks or the predicted class) look correct on real
+input images and that on-device behavior matches expectations.
 
 ![Test mode overview](Images/test-mode-overview.png)
 
@@ -31,7 +31,7 @@ It is used to:
 - run a converted model on sample images
 - verify that the selected `--type`, `--runtime`, and `--precision` match the prepared model
 - inspect annotated outputs and detection text files
-- confirm practical on-device behavior after `qc` and, if needed, after `mAP`
+- confirm practical on-device behavior after `qc` and, if needed, after `eval`
 
 ## Supported Runtime and Precision Matrix
 
@@ -203,12 +203,68 @@ In direct on-device mode:
 - `--adb` is not used
 - the repository and target dependencies must already be installed on the device
 
+## Class-Name YAML
+
+`--yaml` is a YAML file with a `names:` entry that lists the class names in the order the model
+outputs them. Write it either as a list or as an index map. These two files are equivalent:
+
+```yaml
+names:
+  - person
+  - bicycle
+  - car
+```
+
+```yaml
+names:
+  0: person
+  1: bicycle
+  2: car
+```
+
+- **The count must match the model.** The yaml needs exactly as many names as the model has
+  classes, or `test` stops with an error.
+- **Use the order of the model's training.** The names only label the output, so a wrong order
+  gives a wrong label without any error.
+- **detect, segment:** a COCO model uses the 80 names of `coco.yaml`.
+- **pose:** the COCO pose model has one class, so the file is `names: [person]`.
+- **classify:** one name per model output, for example the 1000 ImageNet names. iQ-Foundry does not
+  ship this file. The same yaml is given to `eval`, and the picture folders of `eval` must be
+  named as in the file.
+
+## Other Tasks
+
+Detection is the default. Add `--task` for pose and segmentation. `resnet50` always runs the
+`classify` task.
+
+```bash
+./docker/iqf run test \
+  --type yolov26 \
+  --task pose \
+  --runtime litert \
+  --precision int8 \
+  --model /path/to/yolov26_pose_litert_int8.tflite \
+  --yaml /path/to/person.yaml \
+  --images /path/to/test_images \
+  --adb
+```
+
+- **pose:** annotated pictures with boxes and keypoints.
+- **segment:** annotated pictures with boxes and masks.
+- **classify:** the picture with its top-1 class and score drawn on it, and a `.txt` with the top-5.
+  `classify` runs through ADB only, so `--adb` is required, and the YOLO postprocess options
+  (`--conf`, `--nms`, `--topk`, `--max-det`, `--postprocess-flow`, `--o2o-nms`,
+  `--disable-int8-prefilter`) do not apply.
+- All of them print `avg_model_invoke_ms` at the end, the average time of the model call on the
+  device.
+
 ## Required Inputs
 
 `test` requires the following:
 
 - the wrapper subcommand `./docker/iqf run test`
-- `--type` with one of `yolov10`, `yolov11`, or `yolov26`
+- `--type` with one of `yolov10`, `yolov11`, `yolov26`, or `resnet50`
+- `--task` for `pose` and `segment` (the default is `detect`; `resnet50` uses `classify`)
 - `--runtime` with one of `litert`, `onnx`, or `qairt`
 - `--precision` with one of `fp32`, `int8`, `w8a16`, or `fp16`, in a supported combination:
   `litert` + `int8`/`fp32`, `onnx` + `fp32`/`w8a16`, `qairt` + `int8`/`w8a16`/`fp16`
@@ -216,7 +272,7 @@ In direct on-device mode:
   - LiteRT: `.tflite`
   - ONNX Runtime: `.onnx` or compatible `.onnx.zip`
   - QAIRT: `.bin` HTP context binary
-- `--yaml` pointing to the class-name YAML file
+- `--yaml` pointing to the class-name YAML file, see [Class-Name YAML](#class-name-yaml)
 - exactly one of:
   - `--images`
   - `--image`
@@ -229,8 +285,10 @@ When you use the wrapper, pass the path flags directly or save them first throug
 By default, `test` writes results to:
 
 ```text
-out/test/<type>/<type>_inference_<runtime>_<precision>_<timestamp>/
+out/test/<task>/<type>/<type>_inference_<runtime>_<precision>_<timestamp>/
 ```
+
+`<task>` is `detect`, `pose`, `segment` or `classify`. For tasks other than `detect`, the folder name also carries the task, for example `yolov26_pose_inference_litert_int8_<timestamp>/`.
 
 The output directory contains:
 
@@ -254,15 +312,16 @@ These defaults are shared across LiteRT, ONNX Runtime, and QAIRT paths.
 
 | Flag | Purpose | Options | Default |
 | --- | --- | --- | --- |
-| `--type` | Select the model family. | `yolov10`, `yolov11`, `yolov26` | Required |
+| `--type` | Select the model family. | `yolov10`, `yolov11`, `yolov26`, `resnet50` | Required |
+| `--task` | Select the task. | `detect`, `pose`, `segment`, `classify` | `detect`, or `classify` for `resnet50` |
 | `--runtime` | Select the deployment runtime. | `litert`, `onnx`, `qairt` | Required |
 | `--precision` | Select the deployment precision. | `fp32`, `int8`, `w8a16`, `fp16` | Required |
 | `--model` | Path to the converted model. | `.tflite`, `.onnx`, `.onnx.zip`, `.bin` | Required |
-| `--yaml` | Path to the class-name YAML file. | filesystem path | Required |
+| `--yaml` | Path to the class-name YAML file, see [Class-Name YAML](#class-name-yaml). | filesystem path | Required |
 | `--images` | Directory of input images. | filesystem path | Required unless `--image` is used |
 | `--image` | Single input image. | filesystem path | Required unless `--images` is used |
 | `--adb` | Run inference on EXMP-Q911 (Qualcomm QCS9075) through ADB from the host. | enabled or omitted | off |
-| `--output` | Override the output directory. | filesystem path | `out/test/<type>/<type>_inference_<runtime>_<precision>_<timestamp>/` |
+| `--output` | Override the output directory. | filesystem path | `out/test/<task>/<type>/<type>_inference_<runtime>_<precision>_<timestamp>/` |
 | `--conf` | Confidence threshold used in postprocess. | float | model default |
 | `--nms` | NMS IoU threshold used in postprocess. | float | model default |
 | `--topk` | Number of candidates kept before NMS. | integer | model default |

@@ -1,5 +1,31 @@
 # Changelogs
 
+## Unreleased
+
+### features
+- Added the `--task` option (`detect`, `pose`, `segment`, `classify`). `detect` stays the default, and `resnet50` uses `classify`. The valid model type, task, runtime and precision combinations are defined in one place, `iqf_registry.py`, and are checked at startup.
+- Added YOLO26 pose estimation (`--type yolov26 --task pose`) and instance segmentation (`--task segment`) across `qc`, `test`, and `eval` for LiteRT, ONNX Runtime, and QAIRT.
+- Added ResNet50 image classification (`--type resnet50`) for all seven runtime and precision combinations. `qc` reads a torchvision `state_dict` (`.pt` / `.pth`) and builds the ImageNet mean and standard deviation into the model, so the target feeds plain 0-255 pixels as for YOLO.
+- `eval` now scores pose by COCO keypoint OKS and segmentation by mask IoU (`mAP@0.5` and `mAP@0.5:0.95`), reading COCO `.json` or YOLO `.txt` labels. VOC `.xml` stays detection only.
+- `eval` for `resnet50` reports top-1 and top-5 accuracy from one picture folder per class and a class-name `--yaml`. `test` draws the top-1 class on each picture and writes the top-5 to a `.txt`. Classification runs through ADB only.
+- `test` for `resnet50` prints `avg_model_invoke_ms`, as the YOLO tasks do.
+
+### changes
+- Renamed the `mAP` mode to `eval`. Host paths saved under `mAP` in `.iqf/docker-paths.json` are carried over automatically.
+- Default outputs now include the task: `out/model/<task>/<type>/`, `out/eval_results/<task>/<type>/`, and `out/test/<task>/<type>/`. The eval report is named `<type>_eval_result_...`. For tasks other than `detect`, file names also carry the task, for example `yolov26_pose_litert_int8_<timestamp>.tflite`.
+- Options that do not apply to classification (`--qc-head`, `--fp-head`, `--conf`, `--nms`, `--max-det`, `--topk`) are rejected for `resnet50` instead of being ignored.
+
+### refactor
+- Moved decode, NMS, mask, keypoint, and drawing code shared by `test` and `eval` into the `tool/postprocess/` package, with the per-model and per-task output definitions in `tool/postprocess/specs.py`.
+- Model outputs travel between the target and the host as named files per output role instead of a fixed box-and-score pair.
+- Added `tool/classify_inference.py` and `yolo_models/resnet50.py`; the YOLO flow is unchanged.
+- Calibration helpers in `yolo_models/common.py` take an optional `preprocess`, so ResNet50 calibration pictures are prepared the same way as `eval` and `test` pictures.
+
+### docs
+- Renamed `docs/mAP_mode.md` to `docs/eval_mode.md` and updated the mode name and output paths across `README.md`, the host guides, `docs/`, and both agent skills.
+- `docs/eval_mode.md` now has a Tasks section (scores, label formats, classification folder layout) and dataset preparation notes. `docs/test_mode.md` documents the class-name YAML, and `docs/qc_mode.md` documents the model requirements for YOLO and ResNet50.
+- Updated `README.md` and `docs/other_model_flow.md` for the new tasks and `resnet50`.
+
 ## v1.0.0
 
 ### features
