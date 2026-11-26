@@ -15,7 +15,7 @@
 <p align="center">
   <img src="./docs/Images/support-runtime-precision.png" alt="Supported runtime and precision combinations" width="420">
   <br>
-  <strong>New in v1.0.0:</strong> QAIRT offline conversion with INT8, W8A16 and FP16 support!!
+  <strong>New in v1.1.0:</strong> Pose estimation, instance segmentation and image classification support!!
   <br>
   🤖 <a href="./docs/iqf_assistant.md">Use iQ-Foundry with your coding agent</a>
 </p>
@@ -217,7 +217,7 @@
       </tr>
       <tr>
         <td>QLI2.0</td>
-        <td><code>v1.0.0</code></td>
+        <td><code>v1.1.0</code></td>
         <td><code>innodiskorg/iqf:latest</code></td>
         <td>Ubuntu ADB connection issue (device offline)<br>Windows currently only supports QC mode</td>
         <td>Restart the device</td>
