@@ -9,6 +9,9 @@
 
 > [!NOTE]
 > This guide covers the object detection task only (`--task detect`, the default).
+> Segmentation, pose detection, and classification have only been tested on Ubuntu. Windows (WSL2)
+> users may try these pipelines, as both platforms use the same Docker image, but compatibility is
+> not guaranteed.
 
 ## Prerequisites
 
