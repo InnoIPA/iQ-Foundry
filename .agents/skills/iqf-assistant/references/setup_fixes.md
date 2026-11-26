@@ -72,6 +72,8 @@ check again.
   - Ubuntu: log out of the desktop, or reboot.
   - WSL: close every Ubuntu window, run `wsl --shutdown` in PowerShell, then open Ubuntu again.
   - Then start the agent again.
+  - Quicker, without logging out: in a terminal run `newgrp docker`, then start the agent from
+    that same terminal. Only that terminal gets the group, so use it for this session.
 - **MISSING, "not in the docker group":** run `bash ./docker_install.sh` (it adds the user to the
   group), then log out and back in as above.
 
@@ -124,7 +126,7 @@ check again.
 
 ### `device`
 
-The EXMP-Q911 board is needed for **mAP and test only**. The user can still convert (qc) without
+The EXMP-Q911 board is needed for **eval and test only**. The user can still convert (qc) without
 it.
 
 - **"no EXMP-Q911 device found":**
@@ -147,7 +149,7 @@ it.
 - **"<serial>=unauthorized":** the board has not accepted this computer's adb key. Re-plug it,
   then check again.
 - **"N devices attached" (WARN):** ask the user which board to use. Pass its serial with
-  `--adb-serial <serial>` to mAP and test.
+  `--adb-serial <serial>` to eval and test.
 
 ## Windows checks (`check_setup_windows.ps1`)
 

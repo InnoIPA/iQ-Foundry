@@ -21,8 +21,32 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# iqf_registry.py lives at the repo root and holds the model types, runtimes, precisions and
+# supported combinations shared with cli.py. This module is imported either from docker/ (the
+# wrapper) or by tools that add docker/ to sys.path, so make the repo root importable first.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Re-exported: docker/iqf and the regression runner import these names from this module.
+from iqf_registry import (  # noqa: E402
+    DEFAULT_TASK,
+    MODE_CHOICES as MODE_CHOICES,
+    MODEL_TYPES as MODEL_TYPES,
+    PRECISION_CHOICES as PRECISION_CHOICES,
+    RUNTIME_CHOICES as RUNTIME_CHOICES,
+    SUPPORTED_RUNTIME_PRECISION_COMBINATIONS as SUPPORTED_RUNTIME_PRECISION_COMBINATIONS,
+    SUPPORTED_RUNTIME_PRECISION_ROWS as SUPPORTED_RUNTIME_PRECISION_ROWS,
+    TASK_CHOICES as TASK_CHOICES,
+    TYPE_TASKS as TYPE_TASKS,
+    UnsupportedRuntimePrecision as UnsupportedRuntimePrecision,
+    check_command as check_command,
+    qc_requires_calibration,
+)
 
 DEFAULT_IMAGE = "innodiskorg/iqf:latest"
 REPO_MOUNT_TARGET = "/workspace/iQ-Foundry"
@@ -31,25 +55,6 @@ CONTAINER_INPUT_ROOT = "/inputs"
 CONTAINER_OUTPUT_ROOT = "/outputs"
 DEFAULT_DOCKERFILE = "docker/Dockerfile"
 DOCKER_CONFIG_RELATIVE_PATH = Path(".iqf") / "docker-paths.json"
-MODE_CHOICES = ("qc", "mAP", "test")
-MODEL_TYPES = ("yolov10", "yolov11", "yolov26")
-RUNTIME_CHOICES = ("litert", "onnx", "qairt")
-PRECISION_CHOICES = ("fp32", "int8", "w8a16", "fp16")
-SUPPORTED_RUNTIME_PRECISION_ROWS = (
-    ("litert", "int8", "Existing LiteRT/TFLite INT8 path"),
-    ("litert", "fp32", "LiteRT/TFLite FP32 path"),
-    ("onnx", "fp32", "ONNX Runtime FP32 path"),
-    ("onnx", "w8a16", "ONNX Runtime W8A16 path"),
-    # QAIRT builds a pre-compiled HTP context binary offline. FP32 is absent because
-    # HTP has no FP32 math; a float graph runs as FP16 and only FP16 finalizes on v73.
-    ("qairt", "int8", "QAIRT HTP context binary W8A8 path"),
-    ("qairt", "w8a16", "QAIRT HTP context binary W8A16 path"),
-    ("qairt", "fp16", "QAIRT HTP context binary FP16 path"),
-)
-SUPPORTED_RUNTIME_PRECISION_COMBINATIONS = {
-    (runtime, precision)
-    for runtime, precision, _ in SUPPORTED_RUNTIME_PRECISION_ROWS
-}
 WINDOWS_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]")
 WSL_UNC_PATH_RE = re.compile(
     r"^\\\\(?P<host>wsl(?:\.localhost|\$))\\(?P<distro>[^\\]+)(?P<suffix>(?:\\.*)?)$",
@@ -97,7 +102,7 @@ MODE_PATH_SPECS: dict[str, dict[str, PathSpec]] = {
         "calib_dir": PathSpec("--calib_dir", "dir", required_input=True),
         "output": PathSpec("--output", "output_file"),
     },
-    "mAP": {
+    "eval": {
         "annotations": PathSpec("--annotations", "file_or_dir", required_input=True),
         "reference_model": PathSpec(
             "--reference-model", "file", required_input=True
@@ -106,6 +111,8 @@ MODE_PATH_SPECS: dict[str, dict[str, PathSpec]] = {
         "converted_model": PathSpec(
             "--converted-model", "file", required_input=True
         ),
+        # Class names; only classification (resnet50) needs it, YOLO models carry theirs.
+        "yaml": PathSpec("--yaml", "file"),
         "output_text": PathSpec("--output_text", "output_file"),
         "remote_runner_local": PathSpec("--remote-runner-local", "file"),
     },
@@ -187,13 +194,13 @@ def normalize_host_path(path_value: str) -> Path:
 
 
 def _empty_config() -> dict:
-    return {"version": 2, "types": {}}
+    return {"version": 3, "types": {}}
 
 
 def _invalid_legacy_config_message(config_path: Path) -> str:
     return (
         f"[error] Saved wrapper config at {config_path} is incompatible with iQ-Foundry "
-        "v1.0.0. Re-run './docker/iqf configure <mode> --type <type> --runtime <runtime> "
+        "v1.1.0. Re-run './docker/iqf configure <mode> --type <type> --runtime <runtime> "
         "--precision <precision>' to recreate it."
     )
 
@@ -211,7 +218,8 @@ def _migrate_v1_config(raw: dict, config_path: Path) -> dict:
     if not isinstance(types, dict):
         raise WrapperError(_invalid_legacy_config_message(config_path))
 
-    migrated = _empty_config()
+    # v1 -> v2 (no task level yet; load_wrapper_config adds that afterwards).
+    migrated = {"version": 2, "types": {}}
     for model_type, type_entry in types.items():
         if not isinstance(model_type, str) or not isinstance(type_entry, dict):
             raise WrapperError(_invalid_legacy_config_message(config_path))
@@ -247,6 +255,24 @@ def _migrate_v1_config(raw: dict, config_path: Path) -> dict:
     return migrated
 
 
+def _migrate_v2_config(raw: dict) -> dict:
+    """v2 -> v3: paths saved before --task existed belong to the detect task."""
+    migrated = _empty_config()
+    for model_type, type_entry in raw["types"].items():
+        migrated["types"][model_type] = {DEFAULT_TASK: type_entry}
+    return migrated
+
+
+def _task_flag(task: str) -> str:
+    """'--task <task> ' for the commands we suggest, left out for detect as before --task."""
+    return "" if task == DEFAULT_TASK else f"--task {task} "
+
+
+def _config_label(model_type: str, task: str) -> str:
+    """Name used in saved-path error messages; detect is left implicit, as before --task."""
+    return model_type if task == DEFAULT_TASK else f"{model_type}[{task}]"
+
+
 def load_wrapper_config(config_path: Path) -> dict:
     if not config_path.exists():
         return _empty_config()
@@ -260,12 +286,24 @@ def load_wrapper_config(config_path: Path) -> dict:
         raise WrapperError(f"[error] Invalid config format in {config_path}")
     version = raw.get("version")
     if version == 1:
-        return _migrate_v1_config(raw, config_path)
-    if version != 2:
+        raw = _migrate_v1_config(raw, config_path)
+        version = 2
+    if version not in (2, 3):
         raise WrapperError(f"[error] Unsupported config version in {config_path}")
     if not isinstance(raw.get("types"), dict):
         raise WrapperError(f"[error] Invalid types section in {config_path}")
-    return raw
+    if version == 2:
+        raw = _migrate_v2_config(raw)
+    return _rename_map_mode(raw)
+
+
+def _rename_map_mode(config: dict) -> dict:
+    """The eval mode was called mAP: keep paths saved under that name."""
+    for type_entry in config["types"].values():
+        for task_entry in type_entry.values():
+            if isinstance(task_entry, dict) and "mAP" in task_entry:
+                task_entry.setdefault("eval", task_entry.pop("mAP"))
+    return config
 
 
 def load_saved_mode_paths(
@@ -274,16 +312,19 @@ def load_saved_mode_paths(
     mode: str,
     runtime: str,
     precision: str,
+    *,
+    task: str = DEFAULT_TASK,
 ) -> dict[str, str]:
     config = load_wrapper_config(config_path)
-    type_entry = config["types"].get(model_type, {})
+    label = _config_label(model_type, task)
+    type_entry = config["types"].get(model_type, {}).get(task, {})
     mode_entry = type_entry.get(mode, {})
     runtime_entry = mode_entry.get(runtime, {})
     precision_entry = runtime_entry.get(precision, {})
     raw_paths = precision_entry.get("paths", {})
     if not isinstance(raw_paths, dict):
         raise WrapperError(
-            f"[error] Invalid saved path data for {model_type}/{mode}/{runtime}/{precision}"
+            f"[error] Invalid saved path data for {label}/{mode}/{runtime}/{precision}"
         )
 
     saved: dict[str, str] = {}
@@ -291,13 +332,13 @@ def load_saved_mode_paths(
         if not isinstance(payload, dict):
             raise WrapperError(
                 "[error] Invalid saved path entry for "
-                f"{model_type}/{mode}/{runtime}/{precision}/{field_name}"
+                f"{label}/{mode}/{runtime}/{precision}/{field_name}"
             )
         host = payload.get("host")
         if not isinstance(host, str) or not host.strip():
             raise WrapperError(
                 "[error] Missing host path for "
-                f"{model_type}/{mode}/{runtime}/{precision}/{field_name}"
+                f"{label}/{mode}/{runtime}/{precision}/{field_name}"
             )
         saved[field_name] = host
     return saved
@@ -310,13 +351,17 @@ def save_mode_paths(
     runtime: str,
     precision: str,
     saved_inputs: dict[str, tuple[str, str]],
+    *,
+    task: str = DEFAULT_TASK,
 ) -> None:
     config = load_wrapper_config(config_path)
     config.setdefault("types", {})
     config["types"].setdefault(model_type, {})
-    config["types"][model_type].setdefault(mode, {})
-    config["types"][model_type][mode].setdefault(runtime, {})
-    config["types"][model_type][mode][runtime][precision] = {
+    config["types"][model_type].setdefault(task, {})
+    task_entry = config["types"][model_type][task]
+    task_entry.setdefault(mode, {})
+    task_entry[mode].setdefault(runtime, {})
+    task_entry[mode][runtime][precision] = {
         "paths": {
             field_name: {"kind": kind, "host": host}
             for field_name, (kind, host) in saved_inputs.items()
@@ -364,11 +409,12 @@ def _persisted_kind(mode: str, field_name: str) -> str:
     return MODE_PATH_SPECS[mode][field_name].kind
 
 
-def qc_requires_calibration(runtime: str, precision: str) -> bool:
-    # Float precisions carry no calibration step: litert/onnx fp32 and qairt fp16.
-    if runtime in {"litert", "onnx"} and precision == "fp32":
-        return False
-    return not (runtime == "qairt" and precision == "fp16")
+def _is_required_input(mode: str, field_name: str, task: str) -> bool:
+    # Classification eval has no annotation file (the class is the image folder's name) and needs
+    # the class-name YAML instead, because the model file does not carry its class names.
+    if mode == "eval" and task == "classify" and field_name in ("annotations", "yaml"):
+        return field_name == "yaml"
+    return MODE_PATH_SPECS[mode][field_name].required_input
 
 
 def merge_required_input_paths(
@@ -376,6 +422,7 @@ def merge_required_input_paths(
     model_type: str,
     provided_paths: dict[str, str | None],
     saved_paths: dict[str, str],
+    task: str = DEFAULT_TASK,
 ) -> dict[str, str]:
     merged: dict[str, str] = {}
 
@@ -411,8 +458,8 @@ def merge_required_input_paths(
                 merged[field_name] = value
         return merged
 
-    for field_name, spec in MODE_PATH_SPECS[mode].items():
-        if not spec.required_input:
+    for field_name in MODE_PATH_SPECS[mode]:
+        if not _is_required_input(mode, field_name, task):
             continue
         value = provided_paths.get(field_name) or saved_paths.get(field_name)
         if value:
@@ -421,7 +468,11 @@ def merge_required_input_paths(
 
 
 def missing_required_paths(
-    mode: str, merged_inputs: dict[str, str], runtime: str, precision: str
+    mode: str,
+    merged_inputs: dict[str, str],
+    runtime: str,
+    precision: str,
+    task: str = DEFAULT_TASK,
 ) -> list[str]:
     missing: list[str] = []
     if mode == "test":
@@ -441,7 +492,7 @@ def missing_required_paths(
             and not qc_requires_calibration(runtime, precision)
         ):
             continue
-        if spec.required_input and not merged_inputs.get(field_name):
+        if _is_required_input(mode, field_name, task) and not merged_inputs.get(field_name):
             missing.append(spec.flag)
     return missing
 
@@ -452,6 +503,7 @@ def missing_required_path_message(
     runtime: str,
     precision: str,
     missing_flags: list[str],
+    task: str = DEFAULT_TASK,
 ) -> str:
     if len(missing_flags) == 1:
         detail = missing_flags[0]
@@ -460,7 +512,7 @@ def missing_required_path_message(
     return (
         f"[error] Missing required path for {mode}: {detail}\n"
         f"Run: ./docker/iqf configure {mode} --type {model_type} "
-        f"--runtime {runtime} --precision {precision}\n"
+        f"{_task_flag(task)}--runtime {runtime} --precision {precision}\n"
         f"or pass it directly with the required host-path flags"
     )
 
@@ -574,6 +626,7 @@ def prompt_for_mode_paths(
     runtime: str,
     precision: str,
     *,
+    task: str = DEFAULT_TASK,
     info_printer: ConsolePrinter | None = None,
     warning_printer: ConsolePrinter | None = None,
     error_printer: ConsolePrinter | None = None,
@@ -584,6 +637,7 @@ def prompt_for_mode_paths(
         mode,
         runtime,
         precision,
+        task=task,
     )
     saved_inputs: dict[str, tuple[str, str]] = {}
 
@@ -591,16 +645,16 @@ def prompt_for_mode_paths(
         "qc": (
             ("model", "Enter FP model path for qc (--model)"),
         ),
-        "mAP": (
-            ("annotations", "Enter annotations path for mAP (--annotations)"),
+        "eval": (
+            ("annotations", "Enter annotations path for eval (--annotations)"),
             (
                 "reference_model",
-                "Enter reference model path for mAP (--reference-model)",
+                "Enter reference model path for eval (--reference-model)",
             ),
-            ("images", "Enter image directory for mAP (--images)"),
+            ("images", "Enter image directory for eval (--images)"),
             (
                 "converted_model",
-                "Enter converted model path for mAP (--converted-model)",
+                "Enter converted model path for eval (--converted-model)",
             ),
         ),
     }
@@ -640,6 +694,13 @@ def prompt_for_mode_paths(
         return saved_inputs
 
     prompt_fields = prompts[mode]
+    if mode == "eval" and task == "classify":
+        prompt_fields = tuple(
+            ("yaml", "Enter class YAML path for eval (--yaml)")
+            if field_name == "annotations"
+            else (field_name, prompt)
+            for field_name, prompt in prompt_fields
+        )
     if mode == "qc" and qc_requires_calibration(runtime, precision):
         prompt_fields = prompt_fields + (
             ("calib_dir", "Enter calibration image directory for qc (--calib_dir)"),
@@ -715,12 +776,14 @@ def build_inner_cli_command(
     translated_paths: dict[str, str],
     passthrough_args: list[str],
     use_adb: bool,
+    task: str | None = None,
 ) -> list[str]:
     command = [
         "python3",
         "cli.py",
         "--type",
         model_type,
+        *(["--task", task] if task else []),
         "--mode",
         mode,
         "--runtime",
@@ -731,12 +794,13 @@ def build_inner_cli_command(
 
     if mode == "qc":
         ordered_fields = ("model", "calib_dir", "output")
-    elif mode == "mAP":
+    elif mode == "eval":
         ordered_fields = (
             "annotations",
             "reference_model",
             "images",
             "converted_model",
+            "yaml",
             "output_text",
             "remote_runner_local",
         )
@@ -815,7 +879,7 @@ def _append_adb_runtime_mounts(
 
 
 def _adb_container_preflight_segments() -> list[str]:
-    # mAP and test --adb run adb inside the container before invoking cli.py so the container owns
+    # eval and test --adb run adb inside the container before invoking cli.py so the container owns
     # the adb server for the duration of the run.
     return [
         "adb kill-server >/dev/null 2>&1 || true",
@@ -900,7 +964,11 @@ def plan_run_command(
     passthrough_args: list[str],
     use_adb: bool,
     dry_run: bool,
+    task: str = DEFAULT_TASK,
+    explicit_task: str | None = None,
 ) -> tuple[CommandPlan, dict[str, tuple[str, str]]]:
+    # `task` is the resolved task (it keys the saved paths); `explicit_task` is what the user
+    # typed, and only that is forwarded to cli.py so commands without --task stay unchanged.
     config_path = docker_config_path(repo_root)
     saved_paths = load_saved_mode_paths(
         config_path,
@@ -908,9 +976,14 @@ def plan_run_command(
         mode,
         runtime,
         precision,
+        task=task,
     )
-    merged_inputs = merge_required_input_paths(mode, model_type, provided_paths, saved_paths)
-    missing_flags = missing_required_paths(mode, merged_inputs, runtime, precision)
+    merged_inputs = merge_required_input_paths(
+        mode, model_type, provided_paths, saved_paths, task
+    )
+    missing_flags = missing_required_paths(
+        mode, merged_inputs, runtime, precision, task
+    )
     if missing_flags:
         raise WrapperError(
             missing_required_path_message(
@@ -919,6 +992,7 @@ def plan_run_command(
                 runtime,
                 precision,
                 missing_flags,
+                task,
             )
         )
 
@@ -929,7 +1003,8 @@ def plan_run_command(
     output_display_map: dict[str, str] = {}
 
     for field_name, spec in MODE_PATH_SPECS[mode].items():
-        if spec.required_input:
+        required = _is_required_input(mode, field_name, task)
+        if required:
             raw_value = merged_inputs.get(field_name)
         else:
             raw_value = provided_paths.get(field_name)
@@ -943,12 +1018,12 @@ def plan_run_command(
         translated, mount = _translate_path(mode, field_name, normalized, spec.kind)
         translated_paths[field_name] = translated
         mounts.append(mount)
-        if spec.required_input:
+        if required:
             saved_inputs[field_name] = (spec.kind, normalized)
         if spec.kind.startswith("output_"):
             output_display_map[translated] = normalized
 
-    needs_adb = mode == "mAP" or (mode == "test" and use_adb)
+    needs_adb = mode == "eval" or (mode == "test" and use_adb)
     if mode == "qc":
         qai_hub_ini = Path.home() / ".qai_hub" / "client.ini"
         # qairt converts offline with the vendored SDK and never calls AI Hub.
@@ -975,6 +1050,7 @@ def plan_run_command(
         translated_paths=translated_paths,
         passthrough_args=passthrough_args,
         use_adb=use_adb,
+        task=explicit_task,
     )
     bash_segments: list[str] = []
     if needs_adb:

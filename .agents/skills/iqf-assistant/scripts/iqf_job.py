@@ -283,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("start", help="start a command in the background")
-    p.add_argument("--name", required=True, help="short job name, e.g. qc, mAP, test")
+    p.add_argument("--name", required=True, help="short job name, e.g. qc, eval, test")
     p.add_argument(
         "--repo", help="iQ-Foundry folder (default: the one containing this skill)"
     )

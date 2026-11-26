@@ -78,11 +78,13 @@ def require_qc_deps(family: str, need_hub: bool = True) -> None:
 # Calibration loader
 # ----------------------------
 def load_calibration_images(
-    images_dir: str, input_hw: int, max_images: int = 200
+    images_dir: str, input_hw: int, max_images: int = 200, preprocess=None
 ) -> list[np.ndarray]:
     """
     Loads up to max_images from images_dir and returns NHWC float32 arrays in [0,1]:
       each element: [1,H,W,3]
+    By default each image is squashed to input_hw x input_hw; `preprocess(image_bgr, input_hw)`
+    replaces that (it must return the [1,H,W,3] array itself).
     """
     missing = [name for name, mod in (("numpy", np), ("Pillow", Image)) if mod is None]
     if missing:
@@ -100,10 +102,13 @@ def load_calibration_images(
         if not os.path.isfile(p):
             continue
         try:
-            im = Image.open(p).convert("RGB").resize((input_hw, input_hw))
+            im = Image.open(p).convert("RGB")
+            if preprocess is not None:
+                arr = preprocess(np.ascontiguousarray(np.array(im)[..., ::-1]), input_hw)
+            else:
+                arr = (np.array(im.resize((input_hw, input_hw))).astype(np.float32) / 255.0)[None, ...]
         except Exception:
             continue
-        arr = (np.array(im).astype(np.float32) / 255.0)[None, ...]  # [1,H,W,3]
         sample_inputs.append(arr)
 
     if not sample_inputs:
@@ -268,10 +273,12 @@ def qairt_graph_name(dlc_path: str) -> str:
 
 
 def write_qairt_calibration_inputs(
-    calib_dir: str, input_hw: int, max_calib: int, work_dir: str
+    calib_dir: str, input_hw: int, max_calib: int, work_dir: str, preprocess=None
 ) -> str:
     """Dump calibration images as float32 NHWC .raw files and list them."""
-    samples = load_calibration_images(calib_dir, input_hw, max_images=max_calib)
+    samples = load_calibration_images(
+        calib_dir, input_hw, max_images=max_calib, preprocess=preprocess
+    )
     if not samples:
         raise RuntimeError(f"No calibration images found in {calib_dir}")
     raw_dir = os.path.join(work_dir, "calib")
@@ -287,14 +294,16 @@ def write_qairt_calibration_inputs(
     return list_path
 
 
-def export_traced_model_to_onnx(pt_model, input_shape, onnx_path: str) -> None:
+def export_traced_model_to_onnx(
+    pt_model, input_shape, onnx_path: str, output_names=("boxes", "scores")
+) -> None:
     """Export the traced wrapper to ONNX with fixed shapes and named outputs."""
     assert torch is not None
     dummy = torch.zeros(input_shape, dtype=torch.float32)
     kwargs = {
         "opset_version": QAIRT_ONNX_OPSET,
         "input_names": ["image"],
-        "output_names": ["boxes", "scores"],
+        "output_names": list(output_names),
         "dynamic_axes": None,
         "do_constant_folding": True,
     }

@@ -27,9 +27,23 @@ import numpy as np
 from PIL import Image
 
 try:
-    from tool.adb_runtime_bootstrap import ensure_adb_runtime_venv
+    from tool.adb_runtime_bootstrap import (
+        ensure_adb_runtime_venv,
+        push_postprocess_package,
+    )
+    from tool.postprocess.outputs import load_raw_outputs
+    from tool.postprocess.pose import postprocess_pose, to_original_image
+    from tool.postprocess.segment import build_masks, boxes_to_original, postprocess_segment
+    from tool.postprocess.specs import MODEL_SPECS, TASK_SPECS
 except ModuleNotFoundError:
-    from adb_runtime_bootstrap import ensure_adb_runtime_venv
+    from adb_runtime_bootstrap import (
+        ensure_adb_runtime_venv,
+        push_postprocess_package,
+    )
+    from postprocess.outputs import load_raw_outputs
+    from postprocess.pose import postprocess_pose, to_original_image
+    from postprocess.segment import build_masks, boxes_to_original, postprocess_segment
+    from postprocess.specs import MODEL_SPECS, TASK_SPECS
 
 try:
     from tool.onnx_inference import (
@@ -189,8 +203,51 @@ def xyxy_to_coco_bbox(
     return [x1, y1, bbox_w, bbox_h]
 
 
+def _yolo_pose_keypoints(values: list[float], rec: ImageRec) -> list[float]:
+    """YOLO pose `x y [v]` per point (normalized) -> COCO `x y v` in pixels."""
+    dims = 3 if len(values) % 3 == 0 else 2
+    out = []
+    for i in range(0, len(values), dims):
+        x, y = values[i] * rec.width, values[i + 1] * rec.height
+        v = int(values[i + 2]) if dims == 3 else (2 if (x or y) else 0)
+        out += [x, y, v] if v > 0 else [0.0, 0.0, 0]
+    return out
+
+
+def _yolo_polygon_annotation(values: list[float], rec: ImageRec) -> dict:
+    """YOLO segment polygon `x1 y1 x2 y2 ...` (normalized) -> COCO polygon, bbox and area."""
+    xs = [min(max(v * rec.width, 0.0), float(rec.width)) for v in values[0::2]]
+    ys = [min(max(v * rec.height, 0.0), float(rec.height)) for v in values[1::2]]
+    bbox = xyxy_to_coco_bbox(min(xs), min(ys), max(xs), max(ys), rec.width, rec.height)
+    area = 0.5 * abs(
+        sum(xs[i] * ys[i - 1] - xs[i - 1] * ys[i] for i in range(len(xs)))
+    )
+    polygon = [c for xy in zip(xs, ys) for c in xy]
+    return {"bbox": bbox, "area": float(area), "segmentation": [polygon]}
+
+
+def _check_yolo_value_count(count: int, task: str, where: str) -> None:
+    """detect: 5 values; pose: 5 + 2 or 3 per keypoint; segment: class + >= 3 x,y points."""
+    if task == "detect" and count != 5:
+        raise ValueError(f"Expected 5 values in {where}, got {count}")
+    if task == "pose" and (count <= 5 or ((count - 5) % 3 and (count - 5) % 2)):
+        raise ValueError(
+            f"Expected YOLO pose labels (class cx cy w h, then x y [v] per keypoint) "
+            f"in {where}, got {count} values"
+        )
+    if task == "segment" and (count < 7 or count % 2 == 0):
+        raise ValueError(
+            f"Expected YOLO segment labels (class x1 y1 x2 y2 x3 y3 ...) in {where}, "
+            f"got {count} values"
+        )
+
+
 def parse_yolo_txt_annotations(
-    label_path: Path, rec: ImageRec, class_names: list[str], start_ann_id: int
+    label_path: Path,
+    rec: ImageRec,
+    class_names: list[str],
+    start_ann_id: int,
+    task: str = "detect",
 ) -> tuple[list[dict], int]:
     if not label_path.exists():
         return [], start_ann_id
@@ -202,13 +259,10 @@ def parse_yolo_txt_annotations(
     ]
     for line_no, line in enumerate(lines, start=1):
         parts = line.split()
-        if len(parts) != 5:
-            raise ValueError(
-                f"Expected 5 values in {label_path}:{line_no}, got {len(parts)}"
-            )
+        _check_yolo_value_count(len(parts), task, f"{label_path}:{line_no}")
         try:
             class_id = int(parts[0])
-            cx, cy, bw, bh = (float(parts[i]) for i in range(1, 5))
+            values = [float(v) for v in parts[1:]]
         except ValueError as exc:
             raise ValueError(
                 f"Invalid YOLO annotation in {label_path}:{line_no}"
@@ -218,21 +272,25 @@ def parse_yolo_txt_annotations(
                 f"YOLO class id {class_id} in {label_path}:{line_no} is out of range "
                 f"for {len(class_names)} FP model classes"
             )
-        x1 = (cx - bw / 2.0) * rec.width
-        y1 = (cy - bh / 2.0) * rec.height
-        x2 = (cx + bw / 2.0) * rec.width
-        y2 = (cy + bh / 2.0) * rec.height
-        bbox = xyxy_to_coco_bbox(x1, y1, x2, y2, rec.width, rec.height)
-        annotations.append(
-            {
-                "id": ann_id,
-                "image_id": rec.image_id,
-                "category_id": class_id + 1,
-                "bbox": bbox,
-                "area": float(bbox[2] * bbox[3]),
-                "iscrowd": 0,
-            }
-        )
+        ann = {"id": ann_id, "image_id": rec.image_id, "category_id": class_id + 1}
+        if task == "segment":
+            ann.update(_yolo_polygon_annotation(values, rec))
+        else:
+            cx, cy, bw, bh = values[:4]
+            x1 = (cx - bw / 2.0) * rec.width
+            y1 = (cy - bh / 2.0) * rec.height
+            x2 = (cx + bw / 2.0) * rec.width
+            y2 = (cy + bh / 2.0) * rec.height
+            bbox = xyxy_to_coco_bbox(x1, y1, x2, y2, rec.width, rec.height)
+            ann.update(bbox=bbox, area=float(bbox[2] * bbox[3]))
+        if task == "pose":
+            # No mask in YOLO labels, so the OKS scale is box area * 0.53 (as Ultralytics does
+            # for YOLO pose labels) instead of COCO's mask area: close to, not equal to, COCO.
+            ann["area"] *= 0.53
+            ann["keypoints"] = _yolo_pose_keypoints(values[4:], rec)
+            ann["num_keypoints"] = sum(1 for v in ann["keypoints"][2::3] if v > 0)
+        ann["iscrowd"] = 0
+        annotations.append(ann)
         ann_id += 1
     return annotations, ann_id
 
@@ -283,7 +341,7 @@ def parse_voc_xml_annotations(
     return annotations, ann_id
 
 
-def collect_yolo_txt_class_ids(annotations_dir: Path) -> set[int]:
+def collect_yolo_txt_class_ids(annotations_dir: Path, task: str = "detect") -> set[int]:
     class_ids: set[int] = set()
     for label_path in sorted(annotations_dir.glob("*.txt")):
         lines = [
@@ -291,10 +349,7 @@ def collect_yolo_txt_class_ids(annotations_dir: Path) -> set[int]:
         ]
         for line_no, line in enumerate(lines, start=1):
             parts = line.split()
-            if len(parts) != 5:
-                raise ValueError(
-                    f"Expected 5 values in {label_path}:{line_no}, got {len(parts)}"
-                )
+            _check_yolo_value_count(len(parts), task, f"{label_path}:{line_no}")
             try:
                 class_id = int(parts[0])
             except ValueError as exc:
@@ -326,12 +381,13 @@ def validate_custom_annotation_class_compatibility(
     annotations_dir: Path,
     fp_model_path: Path,
     format_name: str,
+    task: str = "detect",
 ) -> None:
     class_names = load_fp_model_class_names(fp_model_path)
     fp_class_count = len(class_names)
 
     if format_name == "yolo_txt":
-        class_ids = collect_yolo_txt_class_ids(annotations_dir)
+        class_ids = collect_yolo_txt_class_ids(annotations_dir, task)
         if not class_ids:
             return
         observed_min = min(class_ids)
@@ -370,6 +426,7 @@ def normalize_custom_annotations_to_coco(
     images_dir: Path,
     model_path: Path,
     format_name: str,
+    task: str = "detect",
 ) -> ResolvedAnnotations:
     class_names = load_fp_model_class_names(model_path)
     image_records = collect_custom_dataset_images(images_dir)
@@ -393,7 +450,7 @@ def normalize_custom_annotations_to_coco(
         stem = Path(rec.file_name).stem
         if format_name == "yolo_txt":
             parsed, ann_id = parse_yolo_txt_annotations(
-                annotations_dir / f"{stem}.txt", rec, class_names, ann_id
+                annotations_dir / f"{stem}.txt", rec, class_names, ann_id, task
             )
         elif format_name == "voc_xml":
             parsed, ann_id = parse_voc_xml_annotations(
@@ -429,12 +486,12 @@ def normalize_custom_annotations_to_coco(
 
 
 def resolve_annotations_for_map(
-    annotations_path: Path, images_dir: Path, fp_model_path: Path
+    annotations_path: Path, images_dir: Path, fp_model_path: Path, task: str = "detect"
 ) -> ResolvedAnnotations:
     if annotations_path.is_file():
         if annotations_path.suffix.lower() != ".json":
             raise ValueError(
-                "mAP --annotations file must be a COCO .json file, or use a directory "
+                "eval --annotations file must be a COCO .json file, or use a directory "
                 "of custom .txt/.xml annotations"
             )
         return ResolvedAnnotations(
@@ -458,18 +515,18 @@ def resolve_annotations_for_map(
             annotations_path, fp_model_path, "voc_xml"
         )
         validate_custom_annotation_class_compatibility(
-            annotations_path, fp_model_path, "yolo_txt"
+            annotations_path, fp_model_path, "yolo_txt", task
         )
         return normalize_custom_annotations_to_coco(
-            annotations_path, images_dir, fp_model_path, "yolo_txt"
+            annotations_path, images_dir, fp_model_path, "yolo_txt", task
         )
     if txt_files:
         print(f"[info] detected YOLO .txt annotations in {annotations_path}")
         validate_custom_annotation_class_compatibility(
-            annotations_path, fp_model_path, "yolo_txt"
+            annotations_path, fp_model_path, "yolo_txt", task
         )
         return normalize_custom_annotations_to_coco(
-            annotations_path, images_dir, fp_model_path, "yolo_txt"
+            annotations_path, images_dir, fp_model_path, "yolo_txt", task
         )
     if xml_files:
         print(f"[info] detected VOC .xml annotations in {annotations_path}")
@@ -872,18 +929,19 @@ def xyxy_to_xywh(boxes: np.ndarray) -> np.ndarray:
 
 
 class PTRawModel:
-    def __init__(self, model_path: str, family: str, head: str):
+    def __init__(self, model_path: str, family: str, head: str, task: str = "detect"):
         from ultralytics import YOLO
 
         self.family = family
         self.head = head
+        self.task = task
         self.yolo = YOLO(model_path)
         self.core = self.yolo.model
         self.core.eval()
 
     def infer_raw(
         self, image_path: str
-    ) -> tuple[np.ndarray, np.ndarray, float, float, float, tuple[int, int]]:
+    ) -> tuple[dict[str, np.ndarray], float, float, float, tuple[int, int]]:
         import torch
 
         x, ratio, padw, padh, orig_size = preprocess_for_pt(image_path)
@@ -916,6 +974,21 @@ class PTRawModel:
                 )
             boxes = y_dict[branch]["boxes"].detach().cpu().numpy()
             scores = y_dict[branch]["scores"].detach().cpu().numpy()
+            extra_roles = TASK_SPECS[self.task].outputs[2:]
+            if extra_roles:
+                # Tensor names inside the head's output dict, per role.
+                head_keys = {"kpts": "kpts", "mask_coef": "mask_coefficient", "proto": "proto"}
+                outputs = {"boxes": boxes, "scores": scores}
+                for role in extra_roles:
+                    key = head_keys[role]
+                    if key not in y_dict[branch]:
+                        raise RuntimeError(
+                            f"FP model/task mismatch: --task {self.task} needs a "
+                            f"{self.task} model, but branch '{branch}' has "
+                            f"keys={list(y_dict[branch].keys())}"
+                        )
+                    outputs[role] = y_dict[branch][key].detach().cpu().numpy()
+                return outputs, ratio, padw, padh, orig_size
         elif self.family == "yolo11":
             if "boxes" not in y_dict or "scores" not in y_dict:
                 keys = list(y_dict.keys())
@@ -933,7 +1006,7 @@ class PTRawModel:
             scores = y_dict["scores"].detach().cpu().numpy()
         else:
             raise ValueError(self.family)
-        return boxes, scores, ratio, padw, padh, orig_size
+        return {"boxes": boxes, "scores": scores}, ratio, padw, padh, orig_size
 
 
 class TFLiteRawModel:
@@ -946,7 +1019,7 @@ class TFLiteRawModel:
 
     def infer_raw(
         self, image_path: str
-    ) -> tuple[np.ndarray, np.ndarray, float, float, float, tuple[int, int]]:
+    ) -> tuple[dict[str, np.ndarray], float, float, float, tuple[int, int]]:
         x, ratio, padw, padh, orig_size = preprocess_for_tflite(
             image_path, self.input_detail
         )
@@ -954,7 +1027,7 @@ class TFLiteRawModel:
         self.interp.invoke()
         outputs = [self.interp.get_tensor(d["index"]) for d in self.output_details]
         boxes, scores = _find_boxes_scores(outputs, self.output_details)
-        return boxes, scores, ratio, padw, padh, orig_size
+        return {"boxes": boxes, "scores": scores}, ratio, padw, padh, orig_size
 
 
 class ADBTFLiteRawModel:
@@ -970,7 +1043,9 @@ class ADBTFLiteRawModel:
         no_qnn: bool,
         shared_remote_input_dir: str,
         shared_meta: dict,
+        task: str = "detect",
     ):
+        self.task = task
         self.model_path = model_path
         self.adb_serial = adb_serial
         self.remote_workdir = remote_workdir
@@ -1019,6 +1094,8 @@ class ADBTFLiteRawModel:
         ]
         if self.no_qnn:
             cmd.append("--no-qnn")
+        if self.task != "detect":
+            cmd += ["--task", self.task]
 
         adb_shell(self.adb_serial, " ".join(shlex.quote(c) for c in cmd))
 
@@ -1031,28 +1108,19 @@ class ADBTFLiteRawModel:
 
     def get_result_for_image(
         self, rec: ImageRec
-    ) -> tuple[np.ndarray, np.ndarray, float, float, float, tuple[int, int]]:
+    ) -> tuple[dict[str, np.ndarray], float, float, float, tuple[int, int]]:
         if self.local_output_dir is None:
             raise RuntimeError(
                 "prepare_batch(images) must be called before get_result_for_image(rec)"
             )
 
-        stem = str(rec.image_id)
-        boxes_path = self.local_output_dir / f"{stem}_boxes.npy"
-        scores_path = self.local_output_dir / f"{stem}_scores.npy"
-
-        if not boxes_path.exists():
-            raise FileNotFoundError(boxes_path)
-        if not scores_path.exists():
-            raise FileNotFoundError(scores_path)
-
-        boxes = np.load(boxes_path)
-        scores = np.load(scores_path)
+        outputs = load_raw_outputs(
+            self.local_output_dir, str(rec.image_id), TASK_SPECS[self.task].outputs
+        )
 
         meta = self.shared_meta[rec.image_id]
         return (
-            boxes,
-            scores,
+            outputs,
             meta["ratio"],
             meta["padw"],
             meta["padh"],
@@ -1190,12 +1258,125 @@ def eval_map50(
     return float(p.mean()) if p.size else 0.0
 
 
+def pose_dets_to_coco_json(
+    boxes_xyxy: np.ndarray,
+    scores: np.ndarray,
+    class_ids: np.ndarray,
+    keypoints: np.ndarray,
+    image_id: int,
+    model_class_to_category_id: dict[int, int],
+) -> tuple[list[dict], int]:
+    """Pose detections (original-image pixels) -> COCO keypoint result rows."""
+    rows = []
+    skipped = 0
+    for i in range(scores.shape[0]):
+        category_id = model_class_to_category_id.get(int(class_ids[i]))
+        if category_id is None:
+            skipped += 1
+            continue
+        x1, y1, x2, y2 = (float(v) for v in boxes_xyxy[i])
+        rows.append(
+            {
+                "image_id": int(image_id),
+                "category_id": int(category_id),
+                "bbox": [x1, y1, x2 - x1, y2 - y1],
+                "score": float(scores[i]),
+                "keypoints": [float(v) for v in keypoints[i].reshape(-1)],
+            }
+        )
+    return rows, skipped
+
+
+def segment_dets_to_coco_json(
+    boxes_xyxy: np.ndarray,
+    masks: np.ndarray,
+    scores: np.ndarray,
+    class_ids: np.ndarray,
+    image_id: int,
+    model_class_to_category_id: dict[int, int],
+) -> tuple[list[dict], int]:
+    """Segmentation detections (original-image pixels) -> COCO segm result rows (RLE masks)."""
+    from pycocotools import mask as mask_utils
+
+    rows = []
+    skipped = 0
+    for i in range(scores.shape[0]):
+        if not masks[i].any():  # like Ultralytics, a detection without a mask is dropped
+            continue
+        category_id = model_class_to_category_id.get(int(class_ids[i]))
+        if category_id is None:
+            skipped += 1
+            continue
+        x1, y1, x2, y2 = (float(v) for v in boxes_xyxy[i])
+        rle = mask_utils.encode(np.asfortranarray(masks[i].astype(np.uint8)))
+        rle["counts"] = rle["counts"].decode("ascii")
+        rows.append(
+            {
+                "image_id": int(image_id),
+                "category_id": int(category_id),
+                "bbox": [x1, y1, x2 - x1, y2 - y1],
+                "score": float(scores[i]),
+                "segmentation": rle,
+            }
+        )
+    return rows, skipped
+
+
+def eval_segm_ap(
+    ann_path: Path, pred_json: Path, image_ids: list[int]
+) -> tuple[float, float]:
+    """COCO mask AP: (AP at IoU 0.5, AP averaged over IoU 0.5:0.95), computed on the masks."""
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
+
+    coco_gt = COCO(str(ann_path))
+    preds = json.loads(pred_json.read_text())
+    if not preds:
+        return 0.0, 0.0
+    coco_dt = coco_gt.loadRes(preds)
+
+    ev = COCOeval(coco_gt, coco_dt, "segm")
+    ev.params.imgIds = list(image_ids)
+    ev.evaluate()
+    ev.accumulate()
+    ev.summarize()
+    return max(float(ev.stats[1]), 0.0), max(float(ev.stats[0]), 0.0)
+
+
+def eval_pose_ap(
+    ann_path: Path, pred_json: Path, image_ids: list[int], keypoint_count: int
+) -> tuple[float, float]:
+    """COCO keypoint AP by OKS: (AP at OKS 0.5, AP averaged over OKS 0.5:0.95).
+
+    Like Ultralytics, the 17-point COCO layout uses the COCO per-keypoint sigmas and any other
+    keypoint count uses a uniform 1/N.
+    """
+    from pycocotools.coco import COCO
+    from pycocotools.cocoeval import COCOeval
+
+    coco_gt = COCO(str(ann_path))
+    preds = json.loads(pred_json.read_text())
+    if not preds:
+        return 0.0, 0.0
+    coco_dt = coco_gt.loadRes(preds)
+
+    ev = COCOeval(coco_gt, coco_dt, "keypoints")
+    ev.params.imgIds = list(image_ids)
+    if keypoint_count != 17:
+        ev.params.kpt_oks_sigmas = np.ones(keypoint_count) / keypoint_count
+    ev.evaluate()
+    ev.accumulate()
+    ev.summarize()
+    return max(float(ev.stats[1]), 0.0), max(float(ev.stats[0]), 0.0)
+
+
 def validate_eval_class_count_compatibility(
     reference_class_names: list[str],
     converted_model_path: Path,
     model_type: str,
     runtime: str,
     precision: str,
+    task: str = "detect",
 ) -> None:
     fp_class_count = len(reference_class_names)
     if runtime == "litert":
@@ -1208,12 +1389,14 @@ def validate_eval_class_count_compatibility(
             str(converted_model_path),
             model_type=model_type,
             precision=precision,
+            task=task,
         ).class_count
     elif runtime == "qairt":
         candidate_class_count = load_qairt_model_metadata(
             str(converted_model_path),
             model_type=model_type,
             precision=precision,
+            task=task,
         ).class_count
     else:
         raise RuntimeError(f"Unsupported runtime for class-count validation: {runtime}")
@@ -1235,6 +1418,7 @@ def _build_qairt_runner(cfg: dict, args, shared_candidate_inputs=None):
             qnn_lib=args.qnn_lib,
             backend=args.backend,
             no_qnn=args.no_qnn,
+            task=cfg.get("task", "detect"),
         )
     if shared_candidate_inputs is None:
         raise RuntimeError(
@@ -1252,12 +1436,15 @@ def _build_qairt_runner(cfg: dict, args, shared_candidate_inputs=None):
         no_qnn=args.no_qnn,
         shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
         shared_meta=shared_candidate_inputs["meta"],
+        task=cfg.get("task", "detect"),
     )
 
 
 def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
     if cfg["backend"] == "pt":
-        return PTRawModel(cfg["path"], cfg["family"], cfg["head"])
+        return PTRawModel(
+            cfg["path"], cfg["family"], cfg["head"], cfg.get("task", "detect")
+        )
 
     if cfg["backend"] == "tflite":
         if args.candidate_on_device:
@@ -1277,6 +1464,7 @@ def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
                 no_qnn=args.no_qnn,
                 shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
                 shared_meta=shared_candidate_inputs["meta"],
+                task=cfg.get("task", "detect"),
             )
         return TFLiteRawModel(cfg["path"])
 
@@ -1303,6 +1491,7 @@ def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
                 no_qnn=args.no_qnn,
                 shared_remote_input_dir=shared_candidate_inputs["remote_input_dir"],
                 shared_meta=shared_candidate_inputs["meta"],
+                task=cfg.get("task", "detect"),
             )
         return ORTRawModel(
             model_path=cfg["path"],
@@ -1311,6 +1500,7 @@ def build_model_runner(cfg: dict, args, shared_candidate_inputs=None):
             qnn_lib=args.qnn_lib,
             backend=args.backend,
             no_qnn=args.no_qnn,
+            task=cfg.get("task", "detect"),
         )
 
     raise ValueError(cfg["backend"])
@@ -1344,6 +1534,8 @@ def evaluate_one_model(
         args,
         shared_candidate_inputs=shared_candidate_inputs,
     )
+    task = cfg.get("task", "detect")
+    keypoint_count = 17
     all_preds = []
     skipped_unmapped_predictions = 0
 
@@ -1363,31 +1555,68 @@ def evaluate_one_model(
             candidate_class_quant = getattr(candidate_meta, "class_quant", None)
         for idx, rec in enumerate(images, 1):
             if is_adb_batch:
-                boxes, scores, ratio, padw, padh, orig_size = (
-                    runner.get_result_for_image(rec)
+                outputs, ratio, padw, padh, orig_size = runner.get_result_for_image(rec)
+            else:
+                outputs, ratio, padw, padh, orig_size = runner.infer_raw(rec.path)
+
+            if task == "pose":
+                xyxy, pose_scores, pose_ids, kpts, _ = postprocess_pose(
+                    outputs["boxes"],
+                    outputs["scores"],
+                    outputs["kpts"],
+                    conf_thres=conf_thr,
+                    iou_thres=nms_thr,
+                    topk=300,
+                    max_det=max_det,
+                    flow="o2m",
+                )
+                keypoint_count = int(kpts.shape[1]) if kpts.ndim == 3 else 0
+                width, height = orig_size
+                boxes_o, kpts_o = to_original_image(
+                    xyxy, kpts, ratio, padw, padh, width, height
+                )
+                pred_rows, skipped_unmapped = pose_dets_to_coco_json(
+                    boxes_o, pose_scores, pose_ids, kpts_o,
+                    rec.image_id, model_class_to_category_id,
+                )
+            elif task == "segment":
+                xyxy, seg_scores, seg_ids, coefs, proto, _ = postprocess_segment(
+                    outputs["boxes"],
+                    outputs["scores"],
+                    outputs["mask_coef"],
+                    outputs["proto"],
+                    conf_thres=conf_thr,
+                    iou_thres=nms_thr,
+                    topk=300,
+                    max_det=max_det,
+                    flow="o2m",
+                )
+                width, height = orig_size
+                masks = build_masks(coefs, proto, xyxy, padw, padh, width, height)
+                pred_rows, skipped_unmapped = segment_dets_to_coco_json(
+                    boxes_to_original(xyxy, ratio, padw, padh, width, height),
+                    masks, seg_scores, seg_ids, rec.image_id, model_class_to_category_id,
                 )
             else:
-                boxes, scores, ratio, padw, padh, orig_size = runner.infer_raw(rec.path)
-
-            dets = postprocess_raw(
-                boxes,
-                scores,
-                cfg["decoder"],
-                ratio,
-                padw,
-                padh,
-                orig_size,
-                conf_thr=conf_thr,
-                nms_thr=nms_thr,
-                max_det=max_det,
-                box_quant=candidate_box_quant,
-                class_quant=candidate_class_quant,
-            )
-            pred_rows, skipped_unmapped = dets_to_coco_json(
-                dets,
-                rec.image_id,
-                model_class_to_category_id,
-            )
+                dets = postprocess_raw(
+                    outputs["boxes"],
+                    outputs["scores"],
+                    cfg["decoder"],
+                    ratio,
+                    padw,
+                    padh,
+                    orig_size,
+                    conf_thr=conf_thr,
+                    nms_thr=nms_thr,
+                    max_det=max_det,
+                    box_quant=candidate_box_quant,
+                    class_quant=candidate_class_quant,
+                )
+                pred_rows, skipped_unmapped = dets_to_coco_json(
+                    dets,
+                    rec.image_id,
+                    model_class_to_category_id,
+                )
             all_preds.extend(pred_rows)
             skipped_unmapped_predictions += skipped_unmapped
 
@@ -1406,29 +1635,27 @@ def evaluate_one_model(
             "for classes not present in the annotation categories."
         )
 
+    def _score(pred_json: Path) -> tuple[float, float | None]:
+        image_ids = [rec.image_id for rec in images]
+        if task == "pose":
+            return eval_pose_ap(ann_path, pred_json, image_ids, keypoint_count)
+        if task == "segment":
+            return eval_segm_ap(ann_path, pred_json, image_ids)
+        return eval_map50(ann_path, pred_json, image_ids, max_det=max_det), None
+
     out_json_str = None
     if save_pred_json:
         if outdir is None:
             raise ValueError("outdir is required when save_pred_json=True")
         out_json = outdir / f"{model_key}_predictions.json"
         out_json.write_text(json.dumps(all_preds))
-        map50 = eval_map50(
-            ann_path,
-            out_json,
-            [rec.image_id for rec in images],
-            max_det=max_det,
-        )
+        map50, map50_95 = _score(out_json)
         out_json_str = str(out_json)
     else:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_json = Path(tmp_dir) / f"{model_key}_predictions.json"
             tmp_json.write_text(json.dumps(all_preds))
-            map50 = eval_map50(
-                ann_path,
-                tmp_json,
-                [rec.image_id for rec in images],
-                max_det=max_det,
-            )
+            map50, map50_95 = _score(tmp_json)
 
     return {
         "model_key": model_key,
@@ -1439,22 +1666,23 @@ def evaluate_one_model(
         "decoder": cfg["decoder"],
         "path": cfg["path"],
         "map50": map50,
+        "map50_95": map50_95,
         "num_predictions": len(all_preds),
         "pred_json": out_json_str,
     }
 
 
 def model_decoder_for_type(model_type: str) -> str:
-    if model_type in ("yolov10", "yolov11"):
-        return "dfl16"
-    if model_type == "yolov26":
-        return "ltrb4"
-    raise ValueError(f"Unsupported model type: {model_type}")
+    spec = MODEL_SPECS.get(model_type)
+    if spec is None:
+        raise ValueError(f"Unsupported model type: {model_type}")
+    return "dfl16" if spec.box_mode == "dfl64" else "ltrb4"
 
 
 def fp_head_to_cfg_head(model_type: str, fp_head: str) -> str:
-    if model_type == "yolov11":
-        return "default"
+    spec = MODEL_SPECS.get(model_type)
+    if spec is not None and spec.single_head:
+        return spec.default_head
     if fp_head == "one2many":
         return "o2m"
     if fp_head == "one2one":
@@ -1524,6 +1752,9 @@ def make_report_text(
     abs_delta: float,
     pct_delta: float | None,
     trend: str,
+    task: str = "detect",
+    reference_map50_95: float | None = None,
+    converted_map50_95: float | None = None,
 ) -> str:
     if pct_delta is None:
         pct_delta_str = "N/A (reference mAP@0.5 is 0.0)"
@@ -1547,6 +1778,17 @@ def make_report_text(
         f"pct_delta_vs_reference: {pct_delta_str}",
         f"trend: {trend}",
     ]
+    if task in ("pose", "segment"):
+        # Pose is scored by keypoint OKS and segmentation by mask IoU: the "map50" figures above
+        # are AP at 0.5.
+        what = "Pose AP (OKS)" if task == "pose" else "Mask AP"
+        lines[0] = f"Reference vs Converted {what} Pair Evaluation"
+        lines.insert(1, f"task: {task}")
+        lines += [
+            f"reference_map50_95: {reference_map50_95:.6f}",
+            f"converted_map50_95: {converted_map50_95:.6f}",
+            f"abs_delta_map50_95: {converted_map50_95 - reference_map50_95:+.6f}",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -1559,10 +1801,10 @@ def _validate_pair_eval_inputs(
     int_model_path: Path,
     remote_runner_local_path: Path,
 ) -> str:
-    if model_type not in ("yolov10", "yolov11", "yolov26"):
+    if model_type not in MODEL_SPECS:
         raise ValueError(f"Unsupported model_type: {model_type}")
-    if model_type == "yolov11":
-        return "default"
+    if MODEL_SPECS[model_type].single_head:
+        return MODEL_SPECS[model_type].default_head
     if fp_head not in ("one2many", "one2one"):
         raise ValueError("fp_head must be one of: one2many, one2one")
     for path in (ann_path, img_dir, fp_model_path, int_model_path):
@@ -1580,6 +1822,7 @@ def _build_model_cfgs(
     precision: str,
     reference_model_path: Path,
     converted_model_path: Path,
+    task: str = "detect",
 ) -> tuple[dict, dict]:
     decoder = model_decoder_for_type(model_type)
     family = model_type.replace("v", "")
@@ -1589,6 +1832,7 @@ def _build_model_cfgs(
         "head": fp_head_to_cfg_head(model_type, fp_head),
         "decoder": decoder,
         "path": str(reference_model_path),
+        "task": task,
     }
     candidate_cfg = {
         "backend": {"litert": "tflite", "qairt": "qairt"}.get(runtime, "onnx"),
@@ -1598,6 +1842,7 @@ def _build_model_cfgs(
         "quant": precision,
         "decoder": decoder,
         "path": str(converted_model_path),
+        "task": task,
     }
     return reference_cfg, candidate_cfg
 
@@ -1650,6 +1895,7 @@ def run_pair_map_eval(
     qnn_lib: str = "/usr/lib/libQnnTFLiteDelegate.so",
     backend: str = "htp",
     no_qnn: bool = False,
+    task: str = "detect",
 ) -> dict:
     ann_path = Path(annotations)
     img_dir = Path(images)
@@ -1671,8 +1917,18 @@ def run_pair_map_eval(
         remote_runner_local_path=remote_runner_local_path,
     )
     resolved_annotations = resolve_annotations_for_map(
-        ann_path, img_dir, reference_model_path
+        ann_path, img_dir, reference_model_path, task
     )
+    if task != "detect" and resolved_annotations.format_name == "voc_xml":
+        resolved_annotations.cleanup()
+        needs = {
+            "pose": "COCO keypoint annotations (a person_keypoints_*.json file)",
+            "segment": "COCO instance-segmentation annotations (an instances_*.json file)",
+        }[task]
+        raise ValueError(
+            f"eval with --task {task} needs {needs} or a folder of YOLO {task} .txt labels "
+            "for --annotations; VOC .xml has no keypoints or masks."
+        )
 
     local_target_requirements = str(
         Path(__file__).resolve().parent.parent / "requirements" / "target.txt"
@@ -1711,6 +1967,8 @@ def run_pair_map_eval(
         str(remote_runner_local_path),
         remote_layout["remote_runner"],
     )
+    # onnx_inference.py is the ONNX runner and imports its helpers from postprocess/ next to it.
+    push_postprocess_package(adb_serial, remote_layout["remote_run_dir"])
     try:
         eval_ann_path = resolved_annotations.eval_ann_path
         imgs = load_coco_images(eval_ann_path, img_dir)
@@ -1733,6 +1991,7 @@ def run_pair_map_eval(
             model_type=model_type,
             runtime=runtime,
             precision=precision,
+            task=task,
         )
         reference_cfg, candidate_cfg = _build_model_cfgs(
             model_type=model_type,
@@ -1741,6 +2000,7 @@ def run_pair_map_eval(
             precision=precision,
             reference_model_path=reference_model_path,
             converted_model_path=effective_converted_model_path,
+            task=task,
         )
         if runtime == "litert":
             input_detail = _load_tflite_input_detail(converted_model_path)
@@ -1763,6 +2023,7 @@ def run_pair_map_eval(
                 adb_serial=adb_serial,
                 remote_input_dir=remote_layout["remote_input_dir"],
                 artifact=onnx_candidate_artifact,
+                task=task,
             )
             shared_candidate_inputs = {
                 "meta": shared_meta,
@@ -1776,6 +2037,7 @@ def run_pair_map_eval(
                 precision=precision,
                 adb_serial=adb_serial,
                 remote_input_dir=remote_layout["remote_input_dir"],
+                task=task,
             )
             shared_candidate_inputs = {
                 "meta": shared_meta,
@@ -1848,6 +2110,9 @@ def run_pair_map_eval(
         abs_delta=abs_delta,
         pct_delta=pct_delta,
         trend=trend,
+        task=task,
+        reference_map50_95=reference_row["map50_95"],
+        converted_map50_95=converted_row["map50_95"],
     )
 
     print(report_text, end="")

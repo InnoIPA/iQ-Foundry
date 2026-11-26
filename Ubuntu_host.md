@@ -13,7 +13,7 @@
 | --- | --- |
 | Host platform | x86 Ubuntu 22.04 |
 | Memory | Recommended minimum 16 GB RAM |
-| Target for `mAP` and host-side `test` | EXMP-Q911 (Qualcomm QCS9075) |
+| Target for `eval` and host-side `test` | EXMP-Q911 (Qualcomm QCS9075) |
 | ADB connection | USB-C cable between the host and EXMP-Q911 |
 | QAI Hub access | [Qualcomm AI Hub](https://aihub.qualcomm.com/) API token (required for `litert` and `onnx` only; `qairt` converts offline) |
 
@@ -21,7 +21,7 @@
 
 ### STEP 1: Connect the Device
 
-Connect the host to EXMP-Q911 with USB-C before using `mAP` or host-side `test`.
+Connect the host to EXMP-Q911 with USB-C before using `eval` or host-side `test`.
 
 <p align="center">
   <img src="./docs/Images/usb-c-target-connection.png" alt="Host to target USB-C connection" width="720">
@@ -69,19 +69,19 @@ Navigate to `Account -> Settings -> API Token` to find your unique API token.
 
 This stores the host-side QAI Hub configuration in `~/.qai_hub/client.ini`.
 
-After these steps, the Ubuntu host is ready for `qc`, `mAP`, and host-side `test`.
+After these steps, the Ubuntu host is ready for `qc`, `eval`, and host-side `test`.
 
 ## Quick Start
 
 > [!TIP]
 > **🤖 Using a coding agent?** If you use Claude Code, Codex or any other coding agent, you can run
 > iQ-Foundry by chatting with the agent through the `iqf-assistant` skill. It checks your setup
-> and runs `qc`, `mAP` and `test` for you. Type `/iqf-assistant` or just ask, for example
+> and runs `qc`, `eval` and `test` for you. Type `/iqf-assistant` or just ask, for example
 > *"convert my model for the board"*. See [iQ-Foundry Assistant](docs/iqf_assistant.md).
 
 `iQ-Foundry` supports two ways to run each mode:
 
-- [Configure Flow](#configure-flow): simple, repeatable wrapper commands for each mode. Save the required host paths in `.iqf/docker-paths.json`, then run the mode with shorter commands. For a guided walkthrough of the repeated-flow experience, see the [iQ-Studio YOLO26 tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).
+- [Configure Flow](#configure-flow-commands): simple, repeatable wrapper commands for each mode. Save the required host paths in `.iqf/docker-paths.json`, then run the mode with shorter commands. For a guided walkthrough of the repeated-flow experience, see the [iQ-Studio Model Deploy tutorials](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/README.md).
 - [One-Shot Commands](#one-shot-commands): full wrapper usage with more explicit control. Pass the required host paths and any extra flags directly in the command.
 
 Use `Configure Flow` when you want an easier repeated workflow. Use `One-Shot Commands` when you
@@ -93,13 +93,21 @@ Configure flow lets you save the required host paths in `.iqf/docker-paths.json`
 mode later with shorter commands.
 
 If you want a simpler guided setup for configure flow, start with the
-[iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main) tutorial:
-[YOLO26 Configure Flow Tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/yolo26/README.md).
+[iQ-Studio](https://github.com/InnoIPA/iQ-Studio/tree/main) tutorials:
+[Model Deploy Tutorials](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/README.md).
 
-The examples below use `yolov26` with `--runtime litert --precision int8`. You can also use
-`--type yolov10` or `--type yolov11`, and swap in any supported runtime/precision pair:
-`litert/int8`, `litert/fp32`, `onnx/fp32`, `onnx/w8a16`, `qairt/int8`, `qairt/w8a16`, or
-`qairt/fp16`.
+The examples below use `yolov26` with `--task detect --runtime litert --precision int8`. You can
+also use any `--type` and `--task` pair from the table below, and swap in any supported
+runtime/precision pair: `litert/int8`, `litert/fp32`, `onnx/fp32`, `onnx/w8a16`, `qairt/int8`,
+`qairt/w8a16`, or `qairt/fp16`. Every task supports all of these runtime/precision pairs.
+
+| `--type` | `--task` |
+| --- | --- |
+| `yolov10`, `yolov11`, `yolov26` | `detect` (default) |
+| `yolov26` | `pose`, `segment` |
+| `resnet50` | `classify` (default) |
+
+`--task` is required for `pose` and `segment`.
 
 ### QC
 
@@ -109,42 +117,46 @@ For the LiteRT INT8 example below, configure the required paths: FP model path a
 image directory.
 
 ```bash
-./docker/iqf configure qc --type yolov26 --runtime litert --precision int8
+./docker/iqf configure qc --type yolov26 --task detect --runtime litert --precision int8
 ```
 
 Run the mode:
 
 ```bash
-./docker/iqf run qc --type yolov26 --runtime litert --precision int8
+./docker/iqf run qc --type yolov26 --task detect --runtime litert --precision int8
 ```
 
-Output location: `out/model/yolov26/yolov26_litert_int8_<timestamp>.tflite`
+Output location: `out/model/detect/yolov26/yolov26_litert_int8_<timestamp>.tflite`
 
-### mAP
+### eval
 
-Use `mAP` to compare source versus converted model quality at `mAP@0.5`. The source model runs on
-the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through ADB.
+Use `eval` to compare source versus converted model quality: `mAP@0.5` for detection, keypoint
+`mAP@0.5` for pose, mask `mAP@0.5` for segmentation, and top-1 / top-5 accuracy for
+classification. The source model runs on the host, and the converted model runs on EXMP-Q911
+(Qualcomm QCS9075) through ADB.
 
 Configure the required paths: annotations path, image directory, reference model path, and
-converted model path.
+converted model path. For `classify`, `configure` asks for the class-name YAML instead of the
+annotations path, and the image directory needs one sub-folder per class (see
+[docs/eval_mode.md](./docs/eval_mode.md#tasks)).
 
 ```bash
-./docker/iqf configure mAP --type yolov26 --runtime litert --precision int8
+./docker/iqf configure eval --type yolov26 --task detect --runtime litert --precision int8
 ```
 
 Run the mode:
 
 ```bash
-./docker/iqf run mAP --type yolov26 --runtime litert --precision int8
+./docker/iqf run eval --type yolov26 --task detect --runtime litert --precision int8
 ```
 
 For a smaller validation run, you can limit the number of images:
 
 ```bash
-./docker/iqf run mAP --type yolov26 --runtime litert --precision int8 --max-images 5
+./docker/iqf run eval --type yolov26 --task detect --runtime litert --precision int8 --max-images 5
 ```
 
-Output location: `out/mAP_results/yolov26/yolov26_mAP_result_litert_int8_<timestamp>.txt`
+Output location: `out/eval_results/detect/yolov26/yolov26_eval_result_litert_int8_<timestamp>.txt`
 
 ### Test
 
@@ -154,16 +166,16 @@ Configure the required paths: prepared model path, YAML file path, and test imag
 directory path.
 
 ```bash
-./docker/iqf configure test --type yolov26 --runtime litert --precision int8
+./docker/iqf configure test --type yolov26 --task detect --runtime litert --precision int8
 ```
 
 Run the mode:
 
 ```bash
-./docker/iqf run test --type yolov26 --runtime litert --precision int8 --adb
+./docker/iqf run test --type yolov26 --task detect --runtime litert --precision int8 --adb
 ```
 
-Output location: `out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`
+Output location: `out/test/detect/yolov26/yolov26_inference_litert_int8_<timestamp>/`
 
 > NOTE:
 > `test` in configure flow commands uses ADB-based host execution. Direct on-device inference is
@@ -174,8 +186,9 @@ Output location: `out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`
 
 ## One-Shot Commands
 
-The examples below use `yolov26` with `--runtime litert --precision int8`. The same workflow also
-supports `yolov10` and `yolov11` by changing `--type`, and supports `litert/fp32`, `onnx/fp32`,
+The examples below use `yolov26` with `--task detect --runtime litert --precision int8`. The same
+workflow also supports every `--type` and `--task` pair in the
+[Configure Flow Commands](#configure-flow-commands) table, and supports `litert/fp32`, `onnx/fp32`,
 `onnx/w8a16`, `qairt/int8`, `qairt/w8a16`, and `qairt/fp16` by updating `--runtime`,
 `--precision`, and the converted model artifact path.
 
@@ -186,6 +199,7 @@ Use `qc` to convert a supported FP `.pt` model into a deployment-ready artifact 
 ```bash
 ./docker/iqf run qc \
   --type yolov26 \
+  --task detect \
   --runtime litert \
   --precision int8 \
   --model /path/to/yolov26n.pt \
@@ -193,18 +207,21 @@ Use `qc` to convert a supported FP `.pt` model into a deployment-ready artifact 
 ```
 
 By default, this writes the compiled model to
-`out/model/yolov26/yolov26_litert_int8_<timestamp>.tflite`.
+`out/model/detect/yolov26/yolov26_litert_int8_<timestamp>.tflite`.
 
 For advanced `qc` options, see [docs/qc_mode.md](./docs/qc_mode.md).
 
-### mAP Mode
+### eval Mode
 
-Use `mAP` to compare source versus converted model quality at `mAP@0.5`. The source model runs on
-the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through ADB.
+Use `eval` to compare source versus converted model quality: `mAP@0.5` for detection, keypoint
+`mAP@0.5` for pose, mask `mAP@0.5` for segmentation, and top-1 / top-5 accuracy for
+classification. The source model runs on the host, and the converted model runs on EXMP-Q911
+(Qualcomm QCS9075) through ADB.
 
 ```bash
-./docker/iqf run mAP \
+./docker/iqf run eval \
   --type yolov26 \
+  --task detect \
   --runtime litert \
   --precision int8 \
   --annotations /path/to/instances_val2017.json \
@@ -214,15 +231,17 @@ the host, and the converted model runs on EXMP-Q911 (Qualcomm QCS9075) through A
 ```
 
 `--annotations` can be either a COCO `.json` file or a custom annotation directory containing
-separate YOLO `.txt` labels or VOC `.xml` labels for each image in the images directory.
+separate YOLO `.txt` labels or VOC `.xml` labels for each image in the images directory. For
+`classify`, pass `--yaml` with the class names instead of `--annotations`, and `--images` needs
+one sub-folder per class (see [docs/eval_mode.md](./docs/eval_mode.md#tasks)).
 
 By default, this writes the report to
-`out/mAP_results/yolov26/yolov26_mAP_result_litert_int8_<timestamp>.txt`.
+`out/eval_results/detect/yolov26/yolov26_eval_result_litert_int8_<timestamp>.txt`.
 
 For `yolov10` and `yolov26`, if the converted model was generated with `--qc-head one2one`, run
-`mAP` with `--fp-head one2one` so the FP branch matches the converted model.
+`eval` with `--fp-head one2one` so the FP branch matches the converted model.
 
-For advanced `mAP` options, see [docs/mAP_mode.md](./docs/mAP_mode.md).
+For advanced `eval` options, see [docs/eval_mode.md](./docs/eval_mode.md).
 
 ### Test Mode
 
@@ -232,6 +251,7 @@ runs from the host through ADB.
 ```bash
 ./docker/iqf run test \
   --type yolov26 \
+  --task detect \
   --runtime litert \
   --precision int8 \
   --model /path/to/yolov26_litert_int8.tflite \
@@ -241,7 +261,9 @@ runs from the host through ADB.
 ```
 
 By default, this writes annotated images, detection `.txt` files, and `classes.txt` to
-`out/test/yolov26/yolov26_inference_litert_int8_<timestamp>/`.
+`out/test/detect/yolov26/yolov26_inference_litert_int8_<timestamp>/`. For the other tasks, the
+annotated images also show keypoints (`pose`) or masks (`segment`), and `classify` draws the
+top-1 class on each image and writes the top-5 to a `.txt` file.
 
 Use `--output` to override the default test output directory.
 
@@ -252,5 +274,5 @@ For advanced `test` options, see [docs/test_mode.md](./docs/test_mode.md).
 Use the mode documents for advanced options and mode-specific notes:
 
 - [./docs/qc_mode.md](./docs/qc_mode.md)
-- [./docs/mAP_mode.md](./docs/mAP_mode.md)
+- [./docs/eval_mode.md](./docs/eval_mode.md)
 - [./docs/test_mode.md](./docs/test_mode.md)

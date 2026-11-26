@@ -2,16 +2,16 @@
 # Install on device with: python3 -m pip install -r requirements/target.txt
 #
 # Mode-to-package mapping:
-# - mAP (device part): numpy, ai-edge-litert
-# - mAP/test (device part, --runtime qairt): none. QLI2.0 ships the QAIRT runtime.
+# - eval (device part): numpy, ai-edge-litert
+# - eval/test (device part, --runtime qairt): none. QLI2.0 ships the QAIRT runtime.
 # - test (IQ9 local): numpy, ai-edge-litert, PyYAML, Pillow, system cv2
-# - qc and host-side mAP/test orchestration are x86-only (see requirements/host.txt)
+# - qc and host-side eval/test orchestration are x86-only (see requirements/host.txt)
 #
 # NOTE:
 # - cv2 is required by tool/inference_tflite.py but is system-provided on IQ9.
 # - Verified on device (2026-09-18, QLI2.0): cv2.__version__ == 4.13.0
 # - Do not pip-install opencv on target via this file.
-# - onnxruntime is required for on-device inference. The wheel is provided by Innodisk under iQ-Foundry/wheels/. Invoking onnxruntime based mAP or test mode will automatically install the wheel to the target, no manual steps required to be followed.
+# - onnxruntime is required for on-device inference. The wheel is provided by Innodisk under iQ-Foundry/wheels/. Invoking onnxruntime based eval or test mode will automatically install the wheel to the target, no manual steps required to be followed.
 #
 # RUNTIME CHANGE (TF -> LiteRT): ai-edge-litert replaces tensorflow==2.17.0 here.
 # QLI2.0 ships Python 3.14 and tensorflow has no cp314 wheel, so the previous pin

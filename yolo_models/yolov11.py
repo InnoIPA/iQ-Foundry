@@ -44,15 +44,6 @@ from yolo_models.common import (
 )
 
 
-YOLOV11_TEST_DEFAULTS = {
-    "default_flow": "default",
-    "conf_thres": 0.25,
-    "iou_thres": 0.6,
-    "topk": 300,
-    "max_det": 100,
-}
-
-
 def _require_qc_deps(need_hub: bool = True) -> None:
     require_qc_deps("yolov11", need_hub=need_hub)
 

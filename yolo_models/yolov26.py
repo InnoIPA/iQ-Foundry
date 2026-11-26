@@ -42,15 +42,7 @@ from yolo_models.common import (
     run_qairt_tool,
     write_qairt_calibration_inputs,
 )
-
-
-YOLOV26_TEST_DEFAULTS = {
-    "default_flow": "o2m",
-    "conf_thres": 0.25,
-    "iou_thres": 0.6,
-    "topk": 300,
-    "max_det": 100,
-}
+from tool.postprocess.specs import TASK_SPECS
 
 
 def _require_qc_deps(need_hub: bool = True) -> None:
@@ -77,10 +69,11 @@ class Yolo26RawBranch8400Wrapper(_TORCH_BASE):
       inside the selected branch and pick the shapes we need.
     """
 
-    def __init__(self, core: torch.nn.Module, branch_key: str):
+    def __init__(self, core: torch.nn.Module, branch_key: str, task: str = "detect"):
         super().__init__()
         self.core = core
         self.branch_key = branch_key
+        self.task = task
 
         # Keep export flags OFF so dict branches remain
         if hasattr(self.core, "export"):
@@ -190,6 +183,40 @@ class Yolo26RawBranch8400Wrapper(_TORCH_BASE):
                 f"and cls [B,C,8400]. Shapes={shapes}"
             )
 
+        if self.task == "pose":
+            kpts = self._find_named_tensor(branch, ("kpts",))
+            if (
+                kpts is None
+                or kpts.ndim != 3
+                or int(kpts.shape[0]) != int(x.shape[0])
+                or int(kpts.shape[1]) % 3 != 0
+                or int(kpts.shape[2]) != 8400
+            ):
+                shapes = [tuple(t.shape) for t in ts]
+                raise RuntimeError(
+                    f"{self.branch_key} branch: could not find kpts [1,3*K,8400]. "
+                    f"Is this a pose model? Shapes={shapes}"
+                )
+            return boxes, cls, kpts
+
+        if self.task == "segment":
+            coef = self._find_named_tensor(branch, ("mask_coefficient",))
+            proto = self._find_named_tensor(branch, ("proto",))
+            if (
+                coef is None
+                or proto is None
+                or coef.ndim != 3
+                or int(coef.shape[2]) != 8400
+                or proto.ndim != 4
+                or int(proto.shape[1]) != int(coef.shape[1])
+            ):
+                shapes = [tuple(t.shape) for t in ts]
+                raise RuntimeError(
+                    f"{self.branch_key} branch: could not find mask_coefficient [1,M,8400] "
+                    f"and proto [1,M,H,W]. Is this a segmentation model? Shapes={shapes}"
+                )
+            return boxes, cls, coef, proto
+
         return boxes, cls
 
 
@@ -207,6 +234,7 @@ class YoloV26Pipeline:
         max_calib: int = 200,
         qc_head: str = "one2many",
         qc_quant_scheme: str = "mse",
+        task: str = "detect",
     ) -> None:
         if runtime == "litert" and precision == "int8":
             self.quantize_convert(
@@ -216,6 +244,7 @@ class YoloV26Pipeline:
                 max_calib=max_calib,
                 qc_head=qc_head,
                 qc_quant_scheme=qc_quant_scheme,
+                task=task,
             )
             return
         if runtime == "litert" and precision == "fp32":
@@ -223,6 +252,7 @@ class YoloV26Pipeline:
                 model_path=model_path,
                 output_path=output_path,
                 qc_head=qc_head,
+                task=task,
             )
             return
         if runtime == "onnx" and precision == "fp32":
@@ -230,6 +260,7 @@ class YoloV26Pipeline:
                 model_path=model_path,
                 output_path=output_path,
                 qc_head=qc_head,
+                task=task,
             )
             return
         if runtime == "onnx" and precision == "w8a16":
@@ -240,6 +271,7 @@ class YoloV26Pipeline:
                 max_calib=max_calib,
                 qc_head=qc_head,
                 qc_quant_scheme=qc_quant_scheme,
+                task=task,
             )
             return
         if runtime == "qairt":
@@ -251,11 +283,12 @@ class YoloV26Pipeline:
                 max_calib=max_calib,
                 qc_head=qc_head,
                 qc_quant_scheme=qc_quant_scheme,
+                task=task,
             )
             return
         raise ValueError(f"Unsupported runtime/precision: {runtime}/{precision}")
 
-    def _build_traced_model(self, model_path: str, qc_head: str):
+    def _build_traced_model(self, model_path: str, qc_head: str, task: str = "detect"):
         _require_qc_deps(need_hub=False)
         assert torch is not None and YOLO is not None
 
@@ -263,7 +296,9 @@ class YoloV26Pipeline:
         input_shape = (1, input_hw, input_hw, 3)
         y = YOLO(model_path)
         core = y.model.eval()
-        torch_model = Yolo26RawBranch8400Wrapper(core, branch_key=qc_head).eval()
+        torch_model = Yolo26RawBranch8400Wrapper(
+            core, branch_key=qc_head, task=task
+        ).eval()
         example = torch.rand(input_shape, dtype=torch.float32)
         pt_model = torch.jit.trace(
             torch_model, example, strict=False, check_trace=False
@@ -279,17 +314,22 @@ class YoloV26Pipeline:
         max_calib: int = 200,
         qc_head: str = "one2many",
         qc_quant_scheme: str = "mse",
+        task: str = "detect",
     ) -> None:
         """Build an HTP context binary: ONNX -> DLC -> (quantize) -> .bin."""
         _require_qc_deps(need_hub=False)
         if precision not in ("int8", "w8a16", "fp16"):
             raise ValueError(f"Unsupported QAIRT precision: {precision}")
 
-        pt_model, input_hw, input_shape = self._build_traced_model(model_path, qc_head)
+        pt_model, input_hw, input_shape = self._build_traced_model(
+            model_path, qc_head, task
+        )
 
         with tempfile.TemporaryDirectory(prefix="qairt_yolov26_") as work_dir:
             onnx_path = os.path.join(work_dir, "model.onnx")
-            export_traced_model_to_onnx(pt_model, input_shape, onnx_path)
+            export_traced_model_to_onnx(
+                pt_model, input_shape, onnx_path, TASK_SPECS[task].outputs
+            )
 
             dlc_path = os.path.join(work_dir, "model.dlc")
             convert_args = [
@@ -297,8 +337,11 @@ class YoloV26Pipeline:
                 "--input_network", onnx_path,
                 "--source_model_input_shape", "image", f"1,{input_hw},{input_hw},3",
                 "--source_model_input_layout", "image", "NHWC",
-                "--out_tensor_name", "boxes",
-                "--out_tensor_name", "scores",
+                *[
+                    arg
+                    for name in TASK_SPECS[task].outputs
+                    for arg in ("--out_tensor_name", name)
+                ],
                 "--target_backend", "HTP",
                 "--output_path", dlc_path,
             ]
@@ -349,13 +392,16 @@ class YoloV26Pipeline:
         model_path: str,
         output_path: str,
         qc_head: str = "one2many",
+        task: str = "detect",
     ) -> None:
         if qc_head not in ("one2many", "one2one"):
             raise ValueError(f"Unsupported qc_head for yolov26: {qc_head}")
         _require_qc_deps()
         assert hub is not None
 
-        pt_model, _, input_shape = self._build_traced_model(model_path, qc_head)
+        pt_model, _, input_shape = self._build_traced_model(
+            model_path, qc_head, task
+        )
         device = hub.Device("Dragonwing IQ-9075 EVK")
         compile_job = hub.submit_compile_job(
             model=pt_model,
@@ -372,13 +418,16 @@ class YoloV26Pipeline:
         model_path: str,
         output_path: str,
         qc_head: str = "one2many",
+        task: str = "detect",
     ) -> None:
         if qc_head not in ("one2many", "one2one"):
             raise ValueError(f"Unsupported qc_head for yolov26: {qc_head}")
         _require_qc_deps()
         assert hub is not None
 
-        pt_model, _, input_shape = self._build_traced_model(model_path, qc_head)
+        pt_model, _, input_shape = self._build_traced_model(
+            model_path, qc_head, task
+        )
         device = hub.Device("Dragonwing IQ-9075 EVK")
         compile_onnx_job = hub.submit_compile_job(
             model=pt_model,
@@ -406,6 +455,7 @@ class YoloV26Pipeline:
         max_calib: int = 200,
         qc_head: str = "one2many",
         qc_quant_scheme: str = "mse",
+        task: str = "detect",
     ) -> None:
         if qc_head not in ("one2many", "one2one"):
             raise ValueError(f"Unsupported qc_head for yolov26: {qc_head}")
@@ -414,7 +464,9 @@ class YoloV26Pipeline:
         _require_qc_deps()
         assert hub is not None
 
-        pt_model, input_hw, input_shape = self._build_traced_model(model_path, qc_head)
+        pt_model, input_hw, input_shape = self._build_traced_model(
+            model_path, qc_head, task
+        )
         device = hub.Device("Dragonwing IQ-9075 EVK")
         compile_onnx_job = hub.submit_compile_job(
             model=pt_model,
@@ -455,6 +507,7 @@ class YoloV26Pipeline:
         max_calib: int = 200,
         qc_head: str = "one2many",
         qc_quant_scheme: str = "mse",
+        task: str = "detect",
     ):
         """
         YOLOv26 .pt -> (trace wrapper) -> AI Hub compile ONNX -> quant INT8
@@ -484,7 +537,9 @@ class YoloV26Pipeline:
         core = y.model.eval()
 
         # 2) Wrap to export selected raw branch tensors
-        torch_model = Yolo26RawBranch8400Wrapper(core, branch_key=qc_head).eval()
+        torch_model = Yolo26RawBranch8400Wrapper(
+            core, branch_key=qc_head, task=task
+        ).eval()
 
         # 3) Trace
         example = torch.rand(input_shape, dtype=torch.float32)

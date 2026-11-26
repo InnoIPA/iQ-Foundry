@@ -1,6 +1,6 @@
 ---
 name: iqf-assistant
-description: Friendly, step-by-step helper for end users of iQ-Foundry. Checks that the Ubuntu or Windows (WSL) host is set up correctly, then runs the qc (convert a YOLO .pt model for the EXMP-Q911 / IQ9 board), mAP (check the converted model's accuracy) and test (run the converted model on pictures) modes for the user, and reformats mAP labels/images that are not in the format iQ-Foundry needs. Use when someone asks to use, try, set up, check or run iQ-Foundry, convert or quantize a YOLO model, check model accuracy or mAP, or run inference on the board, especially when the user is not technical.
+description: Friendly, step-by-step helper for end users of iQ-Foundry. Checks that the Ubuntu or Windows (WSL) host is set up correctly, then runs the qc (convert a YOLO or ResNet50 .pt model for the EXMP-Q911 / IQ9 board), eval (check the converted model's accuracy) and test (run the converted model on pictures) modes for the user, for detection, pose, segmentation and classification, and reformats detection labels/images that are not in the format iQ-Foundry needs. Use when someone asks to use, try, set up, check or run iQ-Foundry, convert or quantize a YOLO or ResNet50 model, check model accuracy (mAP or top-1), or run inference on the board, especially when the user is not technical.
 ---
 
 # iQ-Foundry assistant
@@ -15,7 +15,7 @@ iQ-Foundry has three *modes*:
 | Mode | What to call it when talking to the user | What it does |
 |---|---|---|
 | `qc` | **Convert** | Turns a trained YOLO model (`.pt`) into a model the EXMP-Q911 board can run (`.tflite`, `.onnx` or `.bin`). Runs on this computer and, for litert/onnx, on Qualcomm AI Hub (needs internet). |
-| `mAP` | **Accuracy check** | Compares the original `.pt` model with the converted model on labelled pictures and reports both scores. The converted model runs on the board over USB. |
+| `eval` | **Accuracy check** | Compares the original `.pt` model with the converted model on labelled pictures and reports both scores. The converted model runs on the board over USB. |
 | `test` | **Try it on pictures** | Runs the converted model on the board over USB and saves pictures with boxes drawn on them. |
 
 These instructions work in any coding agent (Claude Code, Codex, ...). Where they say "ask the
@@ -149,7 +149,7 @@ check that your computer is ready; this takes about a minute").
    - macOS or another system: iQ-Foundry needs Ubuntu 22.04 or Windows 11 with WSL. Say so
      and stop.
 3. Each output line is `STATUS  check-id  detail`, with STATUS = `OK`, `WARN` or `MISSING`.
-   The last lines are `ready_for: qc=yes|no mAP=yes|no test=yes|no` and `RESULT: ...`.
+   The last lines are `ready_for: qc=yes|no eval=yes|no test=yes|no` and `RESULT: ...`.
    - The checker also runs `adb kill-server` on the host after looking for the board (the docs
      require this; a host adb server hides the board from iQ-Foundry). That is expected.
 4. Report to the user as a checklist, e.g.:
@@ -168,7 +168,7 @@ check that your computer is ready; this takes about a minute").
    - Something `MISSING`: say which modes are still possible (`ready_for`). If the mode the
      user wants is possible, you may continue; otherwise wait until they say they fixed it,
      then run the check again.
-   - `device` and `usb` matter only for mAP and test; `qai_hub` only for qc.
+   - `device` and `usb` matter only for eval and test; `qai_hub` only for qc.
 
 ## Step 2: Ask what to do
 
@@ -176,13 +176,17 @@ Ask in one message (adapt the wording, keep it simple):
 
 1. **What would you like to do?**
    1. Convert my model for the board (`qc`)
-   2. Check the accuracy of a converted model (`mAP`)
+   2. Check the accuracy of a converted model (`eval`)
    3. Try a converted model on my pictures (`test`)
    4. All of the above, in order (convert → accuracy check → try it) (`all`)
-2. **Which YOLO version is your model?** yolov10, yolov11 or yolov26. If the file name tells you
+2. **Which model is it?** yolov10, yolov11, yolov26 or resnet50. If the file name tells you
    (`yolov10n.pt` → yolov10, `yolo11s.pt` → yolov11, `yolo26n.pt` → yolov26), suggest it and ask
    them to confirm.
-3. **Which format for the board?** Show this menu (skip it when only mAP/test with an existing
+   - **Which task?** Only yolov26 has a choice: detect (boxes, the default), pose (people's body
+     points) or segment (outlines). yolov10/yolov11 are always detect and resnet50 is always
+     classify (sorts a picture into a class): do not ask, just tell the user. Not detect → pass
+     `--task <task>` to every command (Step 5).
+3. **Which format for the board?** Show this menu (skip it when only eval/test with an existing
    converted model: then work out the runtime from the file and confirm, see Step 3):
 
    | # | Runtime / precision | Notes for the user |
@@ -209,10 +213,10 @@ Ask only for what the chosen modes need:
 |---|---|---|
 | qc | The trained model file (`.pt`) | |
 | qc (only options 1, 4, 5, 6) | A folder of calibration pictures | 50–200 typical pictures of what the model will see. Only pictures directly in the folder are used; the first 200 by default. Optional: a different number (`--max_calib N`). |
-| mAP | The labels (annotations): a file or folder | Any of COCO, YOLO, Pascal VOC, LabelMe, CVAT. You will check the format in Step 4. |
-| mAP | The folder of labelled pictures | |
-| mAP | The original `.pt` model | Same one that was converted. With `all`, it is the qc model. |
-| mAP | The converted model | With `all`, it comes from qc; do not ask. Optional: number of pictures (`--max-images N`, default 300). |
+| eval | The labels (annotations): a file or folder | Any of COCO, YOLO, Pascal VOC, LabelMe, CVAT. You will check the format in Step 4. |
+| eval | The folder of labelled pictures | |
+| eval | The original `.pt` model | Same one that was converted. With `all`, it is the qc model. |
+| eval | The converted model | With `all`, it comes from qc; do not ask. Optional: number of pictures (`--max-images N`, default 300). |
 | test | The converted model | With `all`, it comes from qc; do not ask. |
 | test | One picture **or** a folder of pictures | Only `.jpg .jpeg .png .bmp` directly in the folder. |
 | test | Class-names file (`.yaml` with `names:`) | Most users do not have one. Offer to make it from the `.pt` model: `python3 $S/prepare_map_data.py class-yaml --model <model.pt>` (prints `USE_YAML: <file>`). |
@@ -226,13 +230,20 @@ Checking the answers:
   If a path does not exist, say so kindly and ask again.
 - A path containing `:` (other than a `C:\` drive) cannot be used by Docker; ask the user to
   move or rename it.
-- For mAP/test without qc, work out the runtime from the converted model: `.tflite` → litert,
+- For eval/test without qc, work out the runtime from the converted model: `.tflite` → litert,
   `.onnx` / `.onnx.zip` → onnx, `.bin` → qairt. Files made by qc are named
-  `<type>_<runtime>_<precision>_<time>.<ext>`; otherwise ask which precision it is.
+  `<type>[_<task>]_<runtime>_<precision>_<time>.<ext>` (`_<task>` only when the task is not detect, e.g. `yolov26_pose_litert_int8_<time>.tflite`); otherwise ask which precision it is.
+- Data for tasks other than detect (eval): **pose** needs a COCO keypoints `.json` that lists only
+  the pictures in the picture folder; **segment** a COCO instances `.json` with `segmentation`;
+  **classify** has no labels but needs one sub-folder of pictures per class, named as in the
+  class-names `.yaml` (pass it as `--yaml`). Details: `references/data_formats.md`.
 - If the user converted with `--qc-head one2one` (yolov10/yolov26 only; you never add this unless
-  they ask), mAP needs `--fp-head one2one`.
+  they ask), eval needs `--fp-head one2one`.
 
-## Step 4 (mAP only): Check the label format, reformat if needed
+## Step 4 (eval only): Check the label format, reformat if needed
+
+Only for **detect**. For pose, segment and classify skip this step: the helper cannot reformat
+them. Use the user's data as it is and, if it does not match Step 3, ask them to fix it.
 
 Run (this may take a minute; it starts the iQ-Foundry Docker image):
 
@@ -277,12 +288,14 @@ Class names always come from the `.pt` model. Details are in
 1. Build the commands (one line each in practice; `<...>` are the user's checked paths):
 
    ```bash
-   ./docker/iqf run qc --type <type> --runtime <rt> --precision <prec> --model <model.pt> [--calib_dir <calib folder>] [--max_calib N]
-   ./docker/iqf run mAP --type <type> --runtime <rt> --precision <prec> --annotations <USE_ANNOTATIONS> --images <USE_IMAGES> --reference-model <model.pt> --converted-model <converted> [--max-images N] [--adb-serial <serial>]
-   ./docker/iqf run test --type <type> --runtime <rt> --precision <prec> --model <converted> --yaml <names.yaml> (--images <folder> | --image <file>) --adb [--adb-serial <serial>]
+   ./docker/iqf run qc --type <type> [--task <task>] --runtime <rt> --precision <prec> --model <model.pt> [--calib_dir <calib folder>] [--max_calib N]
+   ./docker/iqf run eval --type <type> [--task <task>] --runtime <rt> --precision <prec> --annotations <USE_ANNOTATIONS> --images <USE_IMAGES> --reference-model <model.pt> --converted-model <converted> [--max-images N] [--adb-serial <serial>]
+   ./docker/iqf run test --type <type> [--task <task>] --runtime <rt> --precision <prec> --model <converted> --yaml <names.yaml> (--images <folder> | --image <file>) --adb [--adb-serial <serial>]
    ```
 
    - `test` always gets `--adb` (it runs on the board from this computer).
+   - `--task` only when the task is not detect (resnet50 is classify by default, so it can be left
+     out). For classify eval add `--yaml <names.yaml>` and drop `--annotations`.
    - `--adb-serial` only when the setup check found several boards (ask which one).
    - Add other options (e.g. `--conf 0.25`) only if the user asks for them.
    - Do **not** pass `--output` / `--output_text`. Results go to the documented default places
@@ -291,17 +304,17 @@ Class names always come from the `.pt` model. Details are in
 
      | Mode | Result |
      |---|---|
-     | qc | `out/model/<type>/<type>_<runtime>_<precision>_<time>.<ext>` (`.tflite`, `.onnx` or `.bin`) |
-     | mAP | `out/mAP_results/<type>/<type>_mAP_result_<runtime>_<precision>_<time>.txt` |
-     | test | `out/test/<type>/<type>_inference_<runtime>_<precision>_<time>/` |
+     | qc | `out/model/<task>/<type>/<type>[_<task>]_<runtime>_<precision>_<time>.<ext>` (`.tflite`, `.onnx` or `.bin`) |
+     | eval | `out/eval_results/<task>/<type>/<type>[_<task>]_eval_result_<runtime>_<precision>_<time>.txt` |
+     | test | `out/test/<task>/<type>/<type>[_<task>]_inference_<runtime>_<precision>_<time>/` |
 
      Use `--output` only if the user asks for another location (the parent folder must exist;
      for test the folder itself must not exist yet).
 2. Add `--dry-run` to each command whose inputs already exist and run it. It checks the paths
    and prints `Inner command:` / `Docker command:` without running anything. With `all`, only
-   qc can be dry-run now; mAP and test are dry-run after qc has made the model. If the dry run
+   qc can be dry-run now; eval and test are dry-run after qc has made the model. If the dry run
    prints `[error]`, explain it and fix the input with the user.
-3. Before mAP or test, release the board from the host: `command -v adb >/dev/null && adb kill-server`.
+3. Before eval or test, release the board from the host: `command -v adb >/dev/null && adb kill-server`.
 4. Show the user a short plan and ask for a clear yes, e.g.:
 
    > **Ready to start:**
@@ -321,7 +334,7 @@ mode with the job helper. It runs the command in the background, keeps a log and
 result:
 
 ```bash
-python3 $S/iqf_job.py start --name <qc|mAP|test> -- ./docker/iqf run <mode> ...
+python3 $S/iqf_job.py start --name <qc|eval|test> -- ./docker/iqf run <mode> ...
 ```
 
 It prints `JOB_DIR:`, `LOG:` and `STATE:` within about 5 seconds. Then check every 1–3 minutes
@@ -336,7 +349,7 @@ python3 $S/iqf_job.py status <JOB_DIR>
 - `STATE: finished` with `EXIT_CODE: 0`: the `OUTPUT:` line(s) give the exact result path
   (from iQ-Foundry's `[ok] wrote:` line). Check it exists (`ls -l`), then report (Step 7). If
   there is no `OUTPUT:` line, treat it as unexpected output (hard rule 9). With `all`, the qc
-  `OUTPUT:` is the converted model for mAP and test: dry-run the next mode, then start it (the
+  `OUTPUT:` is the converted model for eval and test: dry-run the next mode, then start it (the
   user already said yes to the whole plan).
 - `[error] cannot write to ...`: `out/` belongs to another user (usually Docker created it).
   Ask the user to run the printed `sudo chown ...` command in their own terminal.
@@ -356,6 +369,16 @@ Tell the user, in plain words, what happened and **where to find the output** (g
 paths):
 
 - **qc**: "Your converted model is ready: `<path>` (<size>)." (`ls -lh <path>`)
+- **eval, pose and segment**: the result file has the same fields as mAP below (`reference_map50`,
+  `converted_map50`, `pct_delta_vs_reference`) plus `reference_map50_95`, `converted_map50_95` and
+  `abs_delta_map50_95`. For pose the score is by keypoints, for segment by masks. Explain it the
+  same way.
+- **eval, classify**: the result file has `reference_top1`, `converted_top1`, `reference_top5`,
+  `converted_top5`, `abs_delta_top1_converted_minus_reference`,
+  `abs_delta_top5_converted_minus_reference` and `top1_agreement_reference_vs_converted`. Explain:
+  "Top-1 is how often the model's first guess is right; top-5 how often the right class is among
+  its five best guesses (0 to 1, higher is better). Agreement is how often the original and the
+  converted model pick the same class; 1.0 means always."
 - **mAP**: read the result file (`cat <OUTPUT path>`). It has `reference_map50`,
   `converted_map50` and `pct_delta_vs_reference`. Explain: "mAP@0.5 is an accuracy score from 0
   to 1 (higher is better). The original model scored 0.52 and the converted model 0.50, so the

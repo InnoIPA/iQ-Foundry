@@ -6,14 +6,16 @@ and to explain problems in plain words.
 
 ## Models and pairs
 
-**Model families (`--type`):** `yolov10`, `yolov11`, `yolov26`.
+**Model families (`--type`):** `yolov10`, `yolov11`, `yolov26`, `resnet50`.
+
+**Tasks (`--task`):** `detect` (the default), `pose`, `segment` (both `yolov26` only) and `classify` (`resnet50` only; it is the default for `resnet50`). The rules below are for `detect` unless a section says otherwise.
 
 **Runtime / precision pairs.** Only these combinations are valid:
 
 | Runtime | Precisions | qc output |
 |---|---|---|
 | litert | int8, fp32 | `.tflite` |
-| onnx | fp32, w8a16 | `.onnx` (mAP and test also take `.onnx.zip`) |
+| onnx | fp32, w8a16 | `.onnx` (eval and test also take `.onnx.zip`) |
 | qairt | int8, w8a16, fp16 | `.bin` |
 
 **How conversion happens:**
@@ -32,12 +34,12 @@ and to explain problems in plain words.
   - Best results come from 50–200 pictures that look like the real use case.
 
 **Advanced options**, only if the user asks:
-- `--qc-head one2many|one2one` (yolov10 and yolov26). Remember it for mAP's `--fp-head`.
+- `--qc-head one2many|one2one` (yolov10 and yolov26). Remember it for eval's `--fp-head`.
 - `--qc-quant-scheme mse|minmax`.
 
-## mAP (accuracy check)
+## eval (accuracy check)
 
-**Required:** `--annotations`, `--images`, `--reference-model` (`.pt`), `--converted-model`.
+**Required:** `--annotations` (not for classify), `--images`, `--reference-model` (`.pt`), `--converted-model`.
 
 **Defaults:** `--max-images` is 300 (the first N pictures), `--conf` is 0.25. The converted model
 runs on the board over adb.
@@ -45,9 +47,29 @@ runs on the board over adb.
 The result file contains `reference_map50`, `converted_map50`,
 `abs_delta_converted_minus_reference` and `pct_delta_vs_reference`.
 
-### Label formats mAP mode reads by itself
+### Pose, segment and classify
 
-The class names always come from the `.pt` model. mAP mode does not use a `.yaml` file.
+- **pose:** `--task pose`, a COCO keypoints file (`person_keypoints_*.json`) or a folder of YOLO
+  pose `.txt` (`class cx cy w h x y [v] ...`). Scored by keypoint OKS: `mAP@0.5` and `mAP@0.5:0.95`.
+- **segment:** `--task segment`, a COCO instances file with `segmentation` (`instances_*.json`) or a
+  folder of YOLO segment `.txt` (`class x1 y1 x2 y2 x3 y3 ...`). Scored on masks: `mAP@0.5` and
+  `mAP@0.5:0.95`.
+- **VOC `.xml` is detection only.** Pose and segment with `.xml` stop with an error.
+- **classify:** no annotations. `--images` is a folder with one sub-folder per class, named exactly
+  as in the class-names yaml (`--yaml`, required). The result file has `reference_top1`,
+  `converted_top1`, `reference_top5`, `converted_top5` and `top1_agreement`. `--conf`, `--nms`,
+  `--max-det`, `--fp-head` and `--topk` are not allowed. `--max-images N` takes pictures from every
+  class folder in turn, so a small N still covers all classes.
+- **`prepare_map_data.py` makes detection labels only.** For pose, segment and classify the user's
+  data must already be in the formats above: the tool would turn segment polygons into boxes and
+  drop keypoints, so do not run it for these tasks.
+- Every picture listed in a COCO `.json` must exist in `--images`. If only a subset of the pictures
+  is used, the `.json` must list only that subset.
+
+### Label formats eval mode reads by itself (detect)
+
+
+For detect, pose and segment the class names come from the `.pt` model, and eval mode does not use a `.yaml` file. Only `classify` needs one.
 
 **1. COCO `.json` file.**
 - `images` entries need `id`, `file_name`, `width` and `height`. The picture is found at
@@ -77,22 +99,22 @@ The class names always come from the `.pt` model. mAP mode does not use a `.yaml
 ### What `prepare_map_data.py` reformats, and why
 
 The tool always writes one COCO file (`annotations_coco.json`) into a **new** folder. That is
-the most robust format for mAP mode. The user's files are never changed.
+the most robust format for eval mode. The user's files are never changed.
 
-| Found | Why mAP mode cannot use it as it is | What the reformat does |
+| Found | Why eval mode cannot use it as it is | What the reformat does |
 |---|---|---|
-| YOLO in the Ultralytics layout (`images/val`, `labels/val`, `data.yaml`) or other sub-folders | mAP mode only reads files directly in the folder | Finds every picture and label in sub-folders and pairs them by path, then by name |
-| YOLO with a `data.yaml` / `classes.txt` whose class order differs from the model | mAP mode would read the numbers in the model's order and give a **wrong score without any error** | Re-numbers the classes by name |
-| YOLO segmentation polygons, or a 6th "confidence" column | mAP mode needs exactly 5 values per line | Turns polygons into boxes and drops the extra column |
-| LabelMe `.json` (one per picture) or CVAT `.xml` | Not a format mAP mode reads | Rectangles and polygons become boxes; points and lines are skipped and counted |
+| YOLO in the Ultralytics layout (`images/val`, `labels/val`, `data.yaml`) or other sub-folders | eval mode only reads files directly in the folder | Finds every picture and label in sub-folders and pairs them by path, then by name |
+| YOLO with a `data.yaml` / `classes.txt` whose class order differs from the model | eval mode would read the numbers in the model's order and give a **wrong score without any error** | Re-numbers the classes by name |
+| YOLO segmentation polygons, or a 6th "confidence" column | eval mode needs exactly 5 values per line | Turns polygons into boxes and drops the extra column |
+| LabelMe `.json` (one per picture) or CVAT `.xml` | Not a format eval mode reads | Rectangles and polygons become boxes; points and lines are skipped and counted |
 | Class names that differ only in capitals, spaces, `_` or `-` (e.g. `Person` and `person`) | Names must match exactly | Matches them to the model's names and lists every match in the report |
 | Class names the model does not have | The run would stop | Asks the user to map them (`--class-map`) or leave them out (`--drop-unknown-classes`) |
 | COCO pictures missing from the folder, or listed with a different path | The run would stop | Matches pictures by file name, and leaves out (and reports) pictures that do not exist |
 | COCO without `width` / `height` | The run would stop | Reads the sizes from the pictures |
-| `.webp` / `.tif` / `.tiff` / `.jfif` pictures with YOLO, VOC, LabelMe or CVAT labels | Skipped by mAP mode | Saves `.png` copies. Then **all** pictures are copied into `<out>/images` so they share one folder |
+| `.webp` / `.tif` / `.tiff` / `.jfif` pictures with YOLO, VOC, LabelMe or CVAT labels | Skipped by eval mode | Saves `.png` copies. Then **all** pictures are copied into `<out>/images` so they share one folder |
 | Several splits (`train`, `val`, `test`) | It is not clear which to use | Asks; `--split val` is typical |
 
-After converting, the tool checks the result with mAP mode's own loaders
+After converting, the tool checks the result with eval mode's own loaders
 (`resolve_annotations_for_map`, `load_coco_images`, `build_model_class_to_coco_category_id_map`
 in `tool/test_map.py`) before printing `VERDICT: CONVERTED`.
 

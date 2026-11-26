@@ -5,7 +5,7 @@ chatting with a coding agent. You do not need to type commands. The assistant:
 
 - checks your setup;
 - asks a few simple questions;
-- runs `qc`, `mAP` or `test`;
+- runs `qc`, `eval` or `test`;
 - tells you where the results are.
 
 ![iQ-Foundry Assistant overview](Images/iqf-assistant-overview.png)
@@ -17,7 +17,7 @@ chatting with a coding agent. You do not need to type commands. The assistant:
 
 1. **Set up your host first.** Follow [Ubuntu_host.md](../Ubuntu_host.md) or
    [Windows_host.md](../Windows_host.md).
-2. Connect the EXMP-Q911 board over USB-C. You need the board for `mAP` and `test`.
+2. Connect the EXMP-Q911 board over USB-C. You need the board for `eval` and `test`.
 3. Open your coding agent (Claude Code, Codex or any other) in the iQ-Foundry folder.
 
 > [!IMPORTANT]
@@ -47,14 +47,14 @@ blocks them by default.
    how to fix it. It never installs anything for you.
 2. **Choose what to do.** The options are:
    - convert a model (`qc`);
-   - check accuracy (`mAP`);
+   - check accuracy (`eval`);
    - try a model on pictures (`test`);
    - all three.
 
    Then pick the runtime and precision.
 3. **Give your files.** These are the model, pictures and labels. The assistant checks every
    path.
-4. **Label check (mAP only).** If your labels are not in a format iQ-Foundry reads, the assistant
+4. **Label check (eval only).** If your labels are not in a format iQ-Foundry reads, the assistant
    tells you and makes a reformatted **copy**. Examples are YOLO sub-folders, LabelMe, CVAT, or a
    different class order. Your original files are never changed.
 5. **Run and report.** You confirm, the mode runs, and the assistant explains the result and
@@ -78,10 +78,10 @@ Check the accuracy of my converted model. My labelled pictures are in /home/me/d
 
 | What | Folder |
 | --- | --- |
-| Converted models (`qc`) | `out/model/<type>/` |
-| Accuracy results (`mAP`) | `out/mAP_results/<type>/` |
-| Pictures with detections (`test`) | `out/test/<type>/` |
-| Reformatted mAP data, class-name files, run logs | `out/iqf-assistant/` |
+| Converted models (`qc`) | `out/model/<task>/<type>/` |
+| Accuracy results (`eval`) | `out/eval_results/<task>/<type>/` |
+| Pictures with detections (`test`) | `out/test/<task>/<type>/` |
+| Reformatted eval data, class-name files, run logs | `out/iqf-assistant/` |
 
 ## Good to Know
 
@@ -90,5 +90,5 @@ Check the accuracy of my converted model. My labelled pictures are in /home/me/d
   for passwords and never shows your token.
 - The assistant runs one mode at a time.
 - It does not change iQ-Foundry's code or your saved `./docker/iqf configure` paths.
-- For advanced options, see [qc_mode.md](qc_mode.md), [mAP_mode.md](mAP_mode.md) and
+- For advanced options, see [qc_mode.md](qc_mode.md), [eval_mode.md](eval_mode.md) and
   [test_mode.md](test_mode.md).

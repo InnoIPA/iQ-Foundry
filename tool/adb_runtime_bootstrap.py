@@ -67,6 +67,19 @@ def _adb_push(serial: str | None, src: str, dst: str) -> None:
     _run_cmd(_adb_prefix(serial) + ["push", src, dst])
 
 
+def push_postprocess_package(serial: str | None, remote_dir: str) -> None:
+    """Push tool/postprocess/ to <remote_dir>/postprocess on the target.
+
+    inference_tflite.py and onnx_inference.py are pushed to the target as standalone scripts and
+    import their shared helpers as `postprocess.detect`, so the package has to sit next to them.
+    """
+    package_dir = Path(__file__).resolve().parent / "postprocess"
+    remote_package = f"{remote_dir.rstrip('/')}/postprocess"
+    _adb_shell(serial, f"mkdir -p {shlex.quote(remote_package)}")
+    for source in sorted(package_dir.glob("*.py")):
+        _adb_push(serial, str(source), f"{remote_package}/{source.name}")
+
+
 def _print_yellow(message: str) -> None:
     print(f"{ANSI_YELLOW}{message}{ANSI_RESET}", flush=True)
 

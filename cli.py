@@ -22,13 +22,29 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 
+# Model types, runtimes, precisions and the supported combinations are defined once in
+# iqf_registry.py (shared with the Docker wrapper's docker/iqf_path_mapper.py).
+from iqf_registry import (
+    DEFAULT_TASK,
+    MODEL_TYPES,
+    PRECISION_CHOICES,
+    QC_OUTPUT_SUFFIXES,
+    RUNTIME_CHOICES,
+    SUPPORTED_RUNTIME_PRECISION_ROWS,
+    TASK_CHOICES,
+    UnsupportedRuntimePrecision,
+    check_command,
+    qc_requires_calibration,
+)
+from tool.postprocess.specs import MODEL_SPECS
+
 DEFAULT_REMOTE_RUNNER_LOCAL = str(
     Path(__file__).resolve().parent / "tool" / "remote_tflite_raw_runner.py"
 )
 DEFAULT_ONNX_REMOTE_RUNNER_LOCAL = str(
     Path(__file__).resolve().parent / "tool" / "onnx_inference.py"
 )
-DEFAULT_MAP_RESULTS_DIR = Path(__file__).resolve().parent / "out" / "mAP_results"
+DEFAULT_MAP_RESULTS_DIR = Path(__file__).resolve().parent / "out" / "eval_results"
 DEFAULT_QC_RESULTS_DIR = Path(__file__).resolve().parent / "out" / "model"
 DEFAULT_TEST_RESULTS_DIR = Path(__file__).resolve().parent / "out" / "test"
 ANSI_RED = "\033[31m"
@@ -42,32 +58,12 @@ ANSI_RESET = "\033[0m"
 WARNING_HOLD_SECONDS = 1.2
 NOTICE_HOLD_SECONDS = 3.0
 
-MODEL_TYPES = ("yolov10", "yolov11", "yolov26")
-RUNTIME_CHOICES = ("litert", "onnx", "qairt")
-PRECISION_CHOICES = ("fp32", "int8", "w8a16", "fp16")
-SUPPORTED_RUNTIME_PRECISION_ROWS = (
-    ("litert", "int8", "Existing LiteRT/TFLite INT8 path"),
-    ("litert", "fp32", "LiteRT/TFLite FP32 path"),
-    ("onnx", "fp32", "ONNX Runtime FP32 path"),
-    ("onnx", "w8a16", "ONNX Runtime W8A16 path"),
-    # QAIRT builds a pre-compiled HTP context binary offline. FP32 is absent because
-    # HTP has no FP32 math; a float graph runs as FP16 and only FP16 finalizes on v73.
-    ("qairt", "int8", "QAIRT HTP context binary W8A8 path"),
-    ("qairt", "w8a16", "QAIRT HTP context binary W8A16 path"),
-    ("qairt", "fp16", "QAIRT HTP context binary FP16 path"),
-)
-SUPPORTED_RUNTIME_PRECISION_COMBINATIONS = {
-    (runtime, precision)
-    for runtime, precision, _ in SUPPORTED_RUNTIME_PRECISION_ROWS
-}
-# Converted-artifact extension per runtime.
-QC_OUTPUT_SUFFIXES = {"litert": ".tflite", "onnx": ".onnx", "qairt": ".bin"}
 WRAPPER_RUNTIME_PRECISION_EXAMPLE = (
     "./docker/iqf run qc --type yolov26 --runtime litert --precision int8"
 )
 
 MODE_REQUIRED_FIELDS = {
-    "mAP": ("annotations", "reference_model", "images", "converted_model"),
+    "eval": ("annotations", "reference_model", "images", "converted_model"),
 }
 
 MODE_REQUIRED_FLAGS = {
@@ -75,7 +71,7 @@ MODE_REQUIRED_FLAGS = {
         "model": "--model",
         "calib_dir": "--calib_dir",
     },
-    "mAP": {
+    "eval": {
         "annotations": "--annotations",
         "reference_model": "--reference-model",
         "images": "--images",
@@ -86,25 +82,21 @@ MODE_REQUIRED_FLAGS = {
 
 @lru_cache(maxsize=1)
 def _load_model_registry():
-    from yolo_models.yolov10 import YOLOV10_TEST_DEFAULTS, YoloV10Pipeline
-    from yolo_models.yolov11 import YOLOV11_TEST_DEFAULTS, YoloV11Pipeline
-    from yolo_models.yolov26 import YOLOV26_TEST_DEFAULTS, YoloV26Pipeline
+    from yolo_models.yolov10 import YoloV10Pipeline
+    from yolo_models.yolov11 import YoloV11Pipeline
+    from yolo_models.yolov26 import YoloV26Pipeline
+    from yolo_models.resnet50 import ResNet50Pipeline
 
-    pipelines = {
+    return {
         "yolov10": YoloV10Pipeline,
         "yolov11": YoloV11Pipeline,
         "yolov26": YoloV26Pipeline,
+        "resnet50": ResNet50Pipeline,
     }
-    test_defaults = {
-        "yolov10": YOLOV10_TEST_DEFAULTS,
-        "yolov11": YOLOV11_TEST_DEFAULTS,
-        "yolov26": YOLOV26_TEST_DEFAULTS,
-    }
-    return pipelines, test_defaults
 
 
 def get_pipeline(model_type: str):
-    pipelines, _ = _load_model_registry()
+    pipelines = _load_model_registry()
     if model_type not in pipelines:
         raise SystemExit(
             f"[error] Unsupported --type {model_type}. "
@@ -114,13 +106,12 @@ def get_pipeline(model_type: str):
 
 
 def get_test_defaults(model_type: str) -> dict:
-    _, test_defaults = _load_model_registry()
-    if model_type not in test_defaults:
+    if model_type not in MODEL_SPECS:
         raise SystemExit(
             f"[error] Unsupported --type {model_type}. "
             f"Use one of: {list(MODEL_TYPES)}"
         )
-    return test_defaults[model_type]
+    return dict(MODEL_SPECS[model_type].test_defaults)
 
 
 def show_warning(message: str, hold_seconds: float = WARNING_HOLD_SECONDS) -> None:
@@ -258,14 +249,16 @@ def _choices(values: tuple[str, ...]) -> str:
 def _help_usage_command() -> str:
     if _wrapper_help_style_enabled():
         return (
-            f"./docker/iqf run {{qc,mAP,test}} --type {_choices(MODEL_TYPES)} "
+            f"./docker/iqf run {{qc,eval,test}} --type {_choices(MODEL_TYPES)} "
+            f"[--task {_choices(TASK_CHOICES)}] "
             f"--runtime {_choices(RUNTIME_CHOICES)} "
             f"--precision {_choices(PRECISION_CHOICES)} "
             "[known path flags] [backend options]"
         )
     return (
         f"python3 cli.py --type {_choices(MODEL_TYPES)} "
-        f"--mode {{qc,mAP,test}} --runtime {_choices(RUNTIME_CHOICES)} "
+        f"[--task {_choices(TASK_CHOICES)}] "
+        f"--mode {{qc,eval,test}} --runtime {_choices(RUNTIME_CHOICES)} "
         f"--precision {_choices(PRECISION_CHOICES)} [options]"
     )
 
@@ -285,13 +278,13 @@ def _help_map_command(runtime: str = "onnx", precision: str = "fp32") -> str:
     converted_model = f"compiled{QC_OUTPUT_SUFFIXES[runtime]}"
     if _wrapper_help_style_enabled():
         return (
-            "./docker/iqf run mAP --type yolov26 --images val/ "
+            "./docker/iqf run eval --type yolov26 --images val/ "
             "--annotations ann.json --reference-model ref.pt "
             f"--converted-model {converted_model} --runtime {runtime} "
             f"--precision {precision}"
         )
     return (
-        "python3 cli.py --type yolov26 --mode mAP --images val/ "
+        "python3 cli.py --type yolov26 --mode eval --images val/ "
         "--annotations ann.json --reference-model ref.pt "
         f"--converted-model {converted_model} --runtime {runtime} "
         f"--precision {precision}"
@@ -361,6 +354,13 @@ def _help_combinations(needs_calibration: bool) -> str:
 
 def _help_runtime_note() -> str:
     return f"Choices: {', '.join(RUNTIME_CHOICES)}; required"
+
+
+def _help_task_note() -> str:
+    return (
+        f"Choices: {', '.join(TASK_CHOICES)}; default: {DEFAULT_TASK} "
+        "(or the only task the --type supports)"
+    )
 
 
 def _help_precision_note() -> str:
@@ -502,7 +502,7 @@ def render_main_help() -> None:
     print_help_lines(
         [
             "  qc    Quantize and convert a computer vision model",
-            "  mAP   Compare reference and compiled model accuracy",
+            "  eval  Compare reference and compiled model accuracy",
             "  test  Run model inference on one image or a folder",
         ]
     )
@@ -531,7 +531,7 @@ def render_main_help() -> None:
             ),
             (
                 _help_map_command("onnx", "fp32"),
-                "Run ONNX Runtime FP32 mAP by passing the required paths directly",
+                "Run ONNX Runtime FP32 eval by passing the required paths directly",
             ),
         ]
     )
@@ -540,7 +540,7 @@ def render_main_help() -> None:
     print_help_command_pairs(
         [
             (_help_mode_details_command("qc"), "Show detailed qc help"),
-            (_help_mode_details_command("mAP"), "Show detailed mAP help"),
+            (_help_mode_details_command("eval"), "Show detailed eval help"),
             (_help_mode_details_command("test"), "Show detailed test help"),
             (
                 "./docker/iqf configure qc --type yolov26 "
@@ -585,6 +585,7 @@ def render_qc_help() -> None:
     print_help_section("Optional Arguments", ANSI_YELLOW)
     print_help_args(
         [
+            ("--task TASK", "Task", _help_task_note()),
             (
                 "--output OUTPUT",
                 "Output path override",
@@ -636,14 +637,14 @@ def render_qc_help() -> None:
 
 def render_map_help() -> None:
     print_help_title(
-        "mAP mode - compare reference and compiled model accuracy",
+        "eval mode - compare reference and compiled model accuracy",
         "Detailed help for pair evaluation with shared inputs and report output.",
     )
 
     print_help_section("Purpose", ANSI_BLUE)
     print_help_lines(
         [
-            "  Use mAP mode to compare a reference model against a compiled "
+            "  Use eval mode to compare a reference model against a compiled "
             "model and write an accuracy report."
         ]
     )
@@ -658,7 +659,7 @@ def render_map_help() -> None:
         ("--reference-model PATH", "Reference model path", "Required"),
         ("--converted-model PATH", "Converted model path", _help_converted_model_note()),
     ]
-    mode_row = _mode_required_argument_row("mAP")
+    mode_row = _mode_required_argument_row("eval")
     if mode_row:
         map_rows.insert(1, mode_row)
     print_help_args(map_rows, flag_color=ANSI_GREEN)
@@ -666,10 +667,11 @@ def render_map_help() -> None:
     print_help_section("Optional Arguments", ANSI_YELLOW)
     print_help_args(
         [
+            ("--task TASK", "Task", _help_task_note()),
             (
                 "--output_text PATH",
                 "Text report path",
-                "Default directory: out/mAP_results/<type>/ with generated filename",
+                "Default directory: out/eval_results/<task>/<type>/ with generated filename",
             ),
             ("--conf CONF", "Confidence threshold", "Default: 0.25"),
             ("--nms NMS", "NMS IoU threshold", "Default: 0.7"),
@@ -782,6 +784,7 @@ def render_test_help() -> None:
     print_help_section("Common Optional Arguments", ANSI_YELLOW)
     print_help_args(
         [
+            ("--task TASK", "Task", _help_task_note()),
             (
                 "--output OUTPUT",
                 "Output path override",
@@ -874,7 +877,7 @@ def render_help_for_mode(mode_name: str | None) -> None:
     if mode_name == "qc":
         render_qc_help()
         return
-    if mode_name == "mAP":
+    if mode_name == "eval":
         render_map_help()
         return
     if mode_name == "test":
@@ -903,6 +906,12 @@ def validate_mode_requirements(args: argparse.Namespace) -> None:
             for field_name in MODE_REQUIRED_FIELDS[args.mode]
             if not getattr(args, field_name, None)
         ]
+        if args.mode == "eval" and args.task == "classify":
+            # The class is the image folder's name, so there is no annotation file; the model
+            # file does not carry its class names (YOLO models do), so --yaml is needed.
+            missing_fields = [f for f in missing_fields if f != "--annotations"]
+            if not args.yaml:
+                missing_fields.append("--yaml")
 
     if missing_fields:
         missing_flags = ", ".join(missing_fields)
@@ -916,6 +925,8 @@ def validate_mode_requirements(args: argparse.Namespace) -> None:
 
 def print_mode_execution_paths(args: argparse.Namespace) -> None:
     print_info(f"[info] {args.mode} execution paths")
+    if args.task != DEFAULT_TASK:
+        print_info(f"[info] task: {args.task}")
     print_info(f"[info] runtime: {args.runtime}")
     print_info(f"[info] precision: {args.precision}")
     if args.mode == "qc":
@@ -924,9 +935,10 @@ def print_mode_execution_paths(args: argparse.Namespace) -> None:
             print_info(f"[info] calib_dir: {args.calib_dir}")
         return
 
-    if args.mode == "mAP":
-        for field_name in ("annotations", "reference_model", "images", "converted_model"):
-            print_info(f"[info] {field_name}: {getattr(args, field_name)}")
+    if args.mode == "eval":
+        for field_name in ("annotations", "reference_model", "images", "converted_model", "yaml"):
+            if getattr(args, field_name):
+                print_info(f"[info] {field_name}: {getattr(args, field_name)}")
         return
 
     if args.mode == "test":
@@ -943,7 +955,7 @@ def parse_args():
     if _contains_option(argv, "--configure"):
         raise SystemExit(
             "[error] Interactive configure mode has moved to the Docker wrapper.\n"
-            "Use: ./docker/iqf configure <qc|mAP|test> --type <type>"
+            "Use: ./docker/iqf configure <qc|eval|test> --type <type>"
         )
 
     selected_mode = _extract_help_mode(argv)
@@ -951,7 +963,7 @@ def parse_args():
         render_help_for_mode(selected_mode)
         raise SystemExit(0)
 
-    if selected_mode in {"qc", "mAP", "test"} and not _has_option_value(argv, "--type"):
+    if selected_mode in {"qc", "eval", "test"} and not _has_option_value(argv, "--type"):
         render_help_for_mode(selected_mode)
         raise SystemExit(0)
 
@@ -961,19 +973,25 @@ def parse_args():
         "iQ-Foundry",
         add_help=False,
         usage=(
-            f"cli.py --type {_choices(MODEL_TYPES)} --mode {{qc,mAP,test}} "
+            f"cli.py --type {_choices(MODEL_TYPES)} --mode {{qc,eval,test}} "
             f"--runtime {_choices(RUNTIME_CHOICES)} "
             f"--precision {_choices(PRECISION_CHOICES)} [options]"
         ),
     )
 
     common = p.add_argument_group("Global Required")
-    common.add_argument("--mode", choices=["qc", "test", "mAP"], required=True)
+    common.add_argument("--mode", choices=["qc", "test", "eval"], required=True)
     common.add_argument(
         "--type",
         required=True,
         choices=MODEL_TYPES,
         help="Model family",
+    )
+    common.add_argument(
+        "--task",
+        choices=TASK_CHOICES,
+        default=None,
+        help="Task",
     )
     common.add_argument(
         "--runtime",
@@ -1014,7 +1032,7 @@ def parse_args():
         help="Quantization scheme override",
     )
 
-    map_eval = p.add_argument_group("mAP Args (--mode mAP)")
+    map_eval = p.add_argument_group("eval Args (--mode eval)")
     map_eval.add_argument("--annotations", help="Annotation file or directory")
     map_eval.add_argument(
         "--reference-model",
@@ -1061,7 +1079,7 @@ def parse_args():
         default=300,
         help="Max images to process",
     )
-    adb_opts = p.add_argument_group("ADB Optional (mAP + test --adb)")
+    adb_opts = p.add_argument_group("ADB Optional (eval + test --adb)")
     adb_opts.add_argument(
         "--adb-serial",
         default=None,
@@ -1152,7 +1170,7 @@ def build_supported_runtime_precision_matrix() -> str:
 
 def _runtime_precision_required_message() -> str:
     return (
-        f"{color_text('[error] v1.0.0 requires both --runtime and --precision.', ANSI_RED)}\n"
+        f"{color_text('[error] v1.1.0 requires both --runtime and --precision.', ANSI_RED)}\n"
         "Example:\n"
         f"  {color_text(WRAPPER_RUNTIME_PRECISION_EXAMPLE, ANSI_WHITE)}"
     )
@@ -1160,7 +1178,7 @@ def _runtime_precision_required_message() -> str:
 
 def _deprecated_model_flag_message() -> str:
     return (
-        f"{color_text('[error] --fp-model and --int-model are deprecated in iQ-Foundry v1.0.0.', ANSI_RED)}\n"
+        f"{color_text('[error] --fp-model and --int-model are deprecated in iQ-Foundry v1.1.0.', ANSI_RED)}\n"
         "Use:\n"
         f"  {color_text('--reference-model', ANSI_WHITE)}\n"
         f"  {color_text('--converted-model', ANSI_WHITE)}"
@@ -1169,7 +1187,7 @@ def _deprecated_model_flag_message() -> str:
 
 def _unsupported_runtime_precision_message(runtime: str, precision: str) -> str:
     return (
-        f"{color_text('[error] Unsupported combination does not exist in iQ-Foundry v1.0.0:', ANSI_RED)}\n"
+        f"{color_text('[error] Unsupported combination does not exist in iQ-Foundry v1.1.0:', ANSI_RED)}\n"
         f"        {color_text(f'runtime={runtime}, precision={precision}', ANSI_WHITE)}\n\n"
         f"{build_supported_runtime_precision_matrix()}"
     )
@@ -1180,9 +1198,9 @@ def _unsupported_runtime_or_precision_value_message(
     precision: str | None,
 ) -> str:
     if runtime not in RUNTIME_CHOICES:
-        detail = f"Unsupported runtime for iQ-Foundry v1.0.0: {runtime}"
+        detail = f"Unsupported runtime for iQ-Foundry v1.1.0: {runtime}"
     else:
-        detail = f"Unsupported precision for iQ-Foundry v1.0.0: {precision}"
+        detail = f"Unsupported precision for iQ-Foundry v1.1.0: {precision}"
     return (
         f"{color_text(f'[error] {detail}', ANSI_RED)}\n\n"
         f"{build_supported_runtime_precision_matrix()}"
@@ -1204,31 +1222,33 @@ def _preflight_cli_argv(argv: list[str]) -> None:
 
 
 def resolve_default_fp_head(model_type: str, fp_head_override: str | None) -> str:
-    if model_type == "yolov11":
+    spec = MODEL_SPECS[model_type]
+    if spec.single_head:
         if fp_head_override is not None:
             show_warning(
-                "[warn] --fp-head is not applicable for yolov11 "
+                f"[warn] --fp-head is not applicable for {model_type} "
                 "and will be ignored (using default head)."
             )
-        return "default"
+        return spec.default_head
 
     if fp_head_override is not None:
         return fp_head_override
-    return "one2many"
+    return spec.default_head
 
 
 def resolve_default_qc_head(model_type: str, qc_head_override: str | None) -> str:
-    if model_type == "yolov11":
+    spec = MODEL_SPECS[model_type]
+    if spec.single_head:
         if qc_head_override is not None:
             show_warning(
-                "[warn] --qc-head ignored for yolov11 "
-                "(yolov11 supports only the default head)"
+                f"[warn] --qc-head ignored for {model_type} "
+                f"({model_type} supports only the default head)"
             )
-        return "default"
+        return spec.default_head
 
     if qc_head_override is not None:
         return qc_head_override
-    return "one2many"
+    return spec.default_head
 
 
 def resolve_default_qc_quant_scheme(
@@ -1236,9 +1256,12 @@ def resolve_default_qc_quant_scheme(
 ) -> str:
     if qc_quant_override is not None:
         return qc_quant_override
-    if model_type == "yolov11":
-        return "minmax"
-    return "mse"
+    return MODEL_SPECS[model_type].default_quant_scheme
+
+
+def _task_name_part(model_type: str, task: str) -> str:
+    """File-name prefix: the type, plus the task for anything but detection."""
+    return model_type if task == DEFAULT_TASK else f"{model_type}_{task}"
 
 
 def resolve_default_qc_output_path(
@@ -1246,14 +1269,15 @@ def resolve_default_qc_output_path(
     output_override: str | None,
     runtime: str,
     precision: str,
+    task: str = DEFAULT_TASK,
 ) -> str:
     if output_override:
         return output_override
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     # qairt emits a pre-compiled HTP context binary, not a framework model file.
     suffix = QC_OUTPUT_SUFFIXES[runtime]
-    stem = f"{model_type}_{runtime}_{precision}_{ts}"
-    return str(DEFAULT_QC_RESULTS_DIR / model_type / f"{stem}{suffix}")
+    stem = f"{_task_name_part(model_type, task)}_{runtime}_{precision}_{ts}"
+    return str(DEFAULT_QC_RESULTS_DIR / task / model_type / f"{stem}{suffix}")
 
 
 def resolve_default_output_text(
@@ -1261,14 +1285,17 @@ def resolve_default_output_text(
     output_text_override: str | None,
     runtime: str,
     precision: str,
+    task: str = DEFAULT_TASK,
 ) -> str:
     if output_text_override:
         return output_text_override
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = _task_name_part(model_type, task)
     return str(
         DEFAULT_MAP_RESULTS_DIR
+        / task
         / model_type
-        / f"{model_type}_mAP_result_{runtime}_{precision}_{ts}.txt"
+        / f"{name}_eval_result_{runtime}_{precision}_{ts}.txt"
     )
 
 
@@ -1277,14 +1304,17 @@ def resolve_default_test_output_path(
     output_override: str | None,
     runtime: str,
     precision: str,
+    task: str = DEFAULT_TASK,
 ) -> str:
     if output_override:
         return output_override
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name = _task_name_part(model_type, task)
     return str(
         DEFAULT_TEST_RESULTS_DIR
+        / task
         / model_type
-        / f"{model_type}_inference_{runtime}_{precision}_{ts}"
+        / f"{name}_inference_{runtime}_{precision}_{ts}"
     )
 
 
@@ -1306,19 +1336,47 @@ def resolve_default_map_max_det(max_det_override: int | None) -> int:
     return 300
 
 
-def validate_runtime_precision(args: argparse.Namespace) -> None:
-    combination = (args.runtime, args.precision)
-    if combination not in SUPPORTED_RUNTIME_PRECISION_COMBINATIONS:
+# Options that only mean something for detection-style models; classification rejects them.
+CLASSIFY_UNSUPPORTED_OPTIONS = (
+    "qc_head",
+    "fp_head",
+    "conf",
+    "nms",
+    "max_det",
+    "topk",
+    "postprocess_flow",
+    "o2o_nms",
+    "disable_int8_prefilter",
+)
+
+
+def check_args(args: argparse.Namespace) -> None:
+    """Check --type / --task / --runtime / --precision together (rules: iqf_registry.py).
+
+    Replaces args.task (None when --task was left out) with the task that will run.
+    """
+    try:
+        args.task = check_command(args.type, args.task, args.runtime, args.precision)
+    except UnsupportedRuntimePrecision as exc:
         raise SystemExit(
             _unsupported_runtime_precision_message(args.runtime, args.precision)
-        )
-
-
-def qc_requires_calibration(runtime: str, precision: str) -> bool:
-    # Float precisions carry no calibration step: litert/onnx fp32 and qairt fp16.
-    if runtime in {"litert", "onnx"} and precision == "fp32":
-        return False
-    return not (runtime == "qairt" and precision == "fp16")
+        ) from exc
+    except ValueError as exc:
+        message, _, rest = str(exc).partition("\n\n")
+        raise SystemExit(
+            f"{color_text('[error] ' + message, ANSI_RED)}\n\n{rest}"
+        ) from exc
+    if args.task == "classify":
+        given = [
+            "--" + name.replace("_", "-")
+            for name in CLASSIFY_UNSUPPORTED_OPTIONS
+            if getattr(args, name, None) not in (None, False)
+        ]
+        if given:
+            raise SystemExit(
+                f"{color_text('[error] ' + ', '.join(given), ANSI_RED)} not applicable "
+                "to --task classify"
+            )
 
 
 def is_iq9_runtime() -> bool:
@@ -1367,9 +1425,12 @@ def _run_qc_mode(args: argparse.Namespace) -> None:
         args.output,
         runtime=args.runtime,
         precision=args.precision,
+        task=args.task,
     )
 
     Path(effective_output).parent.mkdir(parents=True, exist_ok=True)
+    # Pipelines that only do detection have no task argument; pass it only when it matters.
+    task_kwargs = {} if args.task == DEFAULT_TASK else {"task": args.task}
     pipe.convert(
         model_path=args.model,
         output_path=effective_output,
@@ -1379,23 +1440,85 @@ def _run_qc_mode(args: argparse.Namespace) -> None:
         max_calib=args.max_calib,
         qc_head=effective_qc_head,
         qc_quant_scheme=effective_qc_quant_scheme,
+        **task_kwargs,
     )
     print(f"[ok] wrote: {resolve_output_display_path(effective_output)}")
 
 
+def _run_classify_eval(args: argparse.Namespace) -> None:
+    from tool.classify_inference import run_classify_eval
+
+    if not args.images or not args.reference_model or not args.converted_model:
+        raise SystemExit(
+            "[error] eval requires --images, --reference-model and --converted-model"
+        )
+    effective_output_text = resolve_default_output_text(
+        args.type, args.output_text, args.runtime, args.precision, args.task
+    )
+    try:
+        run_classify_eval(
+            reference_model=args.reference_model,
+            converted_model=args.converted_model,
+            yaml_path=args.yaml,
+            images=args.images,
+            output_text=effective_output_text,
+            runtime=args.runtime,
+            precision=args.precision,
+            max_images=args.max_images,
+            adb_serial=args.adb_serial,
+            remote_workdir=args.remote_workdir,
+            qnn_lib=args.qnn_lib,
+            backend=args.backend,
+            no_qnn=args.no_qnn,
+        )
+    except (FileNotFoundError, PermissionError, ValueError, KeyError, RuntimeError, OSError) as exc:
+        raise SystemExit(f"[error] {exc}") from exc
+    print(f"[ok] wrote: {resolve_output_display_path(effective_output_text)}")
+
+
+def _run_classify_test(args: argparse.Namespace) -> None:
+    from tool.classify_inference import run_classify_test
+
+    effective_output = resolve_default_test_output_path(
+        args.type, args.output, args.runtime, args.precision, args.task
+    )
+    try:
+        run_classify_test(
+            model_path=args.model,
+            yaml_path=args.yaml,
+            output_dir=effective_output,
+            runtime=args.runtime,
+            precision=args.precision,
+            image_dir=args.images,
+            image_path=args.image,
+            adb=args.adb,
+            adb_serial=args.adb_serial,
+            remote_workdir=args.remote_workdir,
+            qnn_lib=args.qnn_lib,
+            backend=args.backend,
+            no_qnn=args.no_qnn,
+        )
+    except (FileNotFoundError, PermissionError, ValueError, KeyError, RuntimeError, OSError) as exc:
+        raise SystemExit(f"[error] {exc}") from exc
+    print(f"[ok] wrote: {resolve_output_display_path(effective_output)}")
+
+
 def _run_map_mode(args: argparse.Namespace) -> None:
+    if args.task == "classify":
+        _run_classify_eval(args)
+        return
     from tool.test_map import run_pair_map_eval
 
     if not args.annotations or not args.images:
-        raise SystemExit("[error] mAP requires --annotations and --images")
+        raise SystemExit("[error] eval requires --annotations and --images")
     if args.fp_model or args.int_model:
         raise SystemExit(_deprecated_model_flag_message())
     if not args.reference_model or not args.converted_model:
-        raise SystemExit("[error] mAP requires --reference-model and --converted-model")
-    if args.type in {"yolov10", "yolov26"} and args.fp_head is None:
+        raise SystemExit("[error] eval requires --reference-model and --converted-model")
+    if not MODEL_SPECS[args.type].single_head and args.fp_head is None:
         show_notice(
             "[notice] Caution: if this converted model was generated with --qc-head "
-            "one2one, run mAP with --fp-head one2one. Otherwise the FP comparison "
+            "one2one, run eval with --fp-head one2one. Otherwise the FP comparison "
             "will use one2many and the result can be unfair."
         )
 
@@ -1405,6 +1528,7 @@ def _run_map_mode(args: argparse.Namespace) -> None:
         args.output_text,
         args.runtime,
         args.precision,
+        args.task,
     )
     effective_conf = resolve_default_map_conf(args.conf)
     effective_nms = resolve_default_map_nms(args.nms)
@@ -1438,6 +1562,7 @@ def _run_map_mode(args: argparse.Namespace) -> None:
             qnn_lib=args.qnn_lib,
             backend=args.backend,
             no_qnn=args.no_qnn,
+            **({} if args.task == DEFAULT_TASK else {"task": args.task}),
         )
     except (
         FileNotFoundError,
@@ -1460,6 +1585,7 @@ def _resolve_test_mode_options(
         args.output,
         args.runtime,
         args.precision,
+        args.task,
     )
     effective_conf = args.conf if args.conf is not None else defaults["conf_thres"]
     effective_nms = args.nms if args.nms is not None else defaults["iou_thres"]
@@ -1470,17 +1596,17 @@ def _resolve_test_mode_options(
     effective_postprocess_flow = args.postprocess_flow or "auto"
     effective_o2o_nms = args.o2o_nms
 
-    if args.type == "yolov11":
+    if MODEL_SPECS[args.type].single_head:
         if effective_postprocess_flow in ("o2o", "o2m"):
             show_warning(
-                "[warn] yolov11 supports only the default postprocess flow. "
+                f"[warn] {args.type} supports only the default postprocess flow. "
                 f"Ignoring --postprocess-flow {effective_postprocess_flow} "
                 "and using default."
             )
             effective_postprocess_flow = "default"
         if effective_o2o_nms:
             show_warning(
-                "[warn] --o2o-nms is not applicable for yolov11 and will be ignored."
+                f"[warn] --o2o-nms is not applicable for {args.type} and will be ignored."
             )
             effective_o2o_nms = False
 
@@ -1503,6 +1629,9 @@ def _run_test_mode(args: argparse.Namespace) -> None:
         raise SystemExit("[error] test requires --yaml")
     if bool(args.images) == bool(args.image):
         raise SystemExit("[error] test requires exactly one of --images or --image")
+    if args.task == "classify":
+        _run_classify_test(args)
+        return
 
     show_warning(
         "[warn] Caution: make sure --type matches the quantized model family "
@@ -1563,6 +1692,8 @@ def _run_test_mode(args: argparse.Namespace) -> None:
         "qnn_lib": args.qnn_lib,
         "backend": args.backend,
     }
+    if args.task != DEFAULT_TASK:
+        runner_kwargs["task"] = args.task
     if args.runtime in {"onnx", "qairt"}:
         runner_kwargs["runtime"] = args.runtime
         runner_kwargs["precision"] = args.precision
@@ -1590,13 +1721,13 @@ def _run_test_mode(args: argparse.Namespace) -> None:
 
 def main():
     args = parse_args()
-    validate_runtime_precision(args)
+    check_args(args)
     validate_mode_requirements(args)
 
     if is_iq9_runtime() and (args.mode != "test" or args.adb):
         show_warning(
             "[warn] IQ9 runtime supports only '--mode test' without '--adb'. "
-            "Use an x86 host for qc/mAP or adb-orchestrated test runs."
+            "Use an x86 host for qc/eval or adb-orchestrated test runs."
         )
         raise SystemExit(1)
 
@@ -1605,7 +1736,7 @@ def main():
     if args.mode == "qc":
         _run_qc_mode(args)
         return
-    if args.mode == "mAP":
+    if args.mode == "eval":
         _run_map_mode(args)
         return
     if args.mode == "test":

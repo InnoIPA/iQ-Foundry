@@ -1,6 +1,6 @@
 ---
 name: iqf-pipeline-regression
-description: Run the iQ-Foundry end-to-end pipeline regression (qc -> mAP -> test for yolov10/yolov11/yolov26 on litert, onnx and qairt) against an adb-attached IQ9 target, then produce a per-pipeline, per-mode status report. Use when the user asks to regression-test, smoke-test or verify iQ-Foundry pipelines, check that "all pipelines work", or run qc/mAP/test across models, runtimes and precisions.
+description: Run the iQ-Foundry end-to-end pipeline regression (qc -> eval -> test for yolov10/yolov11/yolov26 on litert, onnx and qairt) against an adb-attached IQ9 target, then produce a per-pipeline, per-mode status report. Use when the user asks to regression-test, smoke-test or verify iQ-Foundry pipelines, check that "all pipelines work", or run qc/eval/test across models, runtimes and precisions.
 ---
 
 # iQ-Foundry pipeline regression
@@ -10,7 +10,7 @@ docs would run them**. A *pipeline* is one model type + runtime + precision, for
 `yolov26-litert-fp32`. Every pipeline runs three *modes* in this fixed order:
 
 1. `qc`: converts the `.pt` model into a runtime model on the host (`.tflite`, `.onnx` or `.bin`).
-2. `mAP`: compares the reference `.pt` with the converted model. The converted model runs on the device over adb.
+2. `eval`: compares the reference `.pt` with the converted model. The converted model runs on the device over adb.
 3. `test`: runs inference with the converted model on the device over adb.
 
 All the work is done by one script: `tool/test/regression/run_pipelines.py`. You collect the inputs,
@@ -111,8 +111,9 @@ cd <repo_root>
 python3 tool/test/regression/run_pipelines.py list
 ```
 
-Expected: a table of pipelines (21 at the time of writing) with columns `NO PIPELINE TYPE RUNTIME
-PRECISION CALIB QC BACKEND ARTIFACT`, ending with `[info] <N> pipelines; ...`. Show this table to
+Expected: a table of pipelines (42 at the time of writing: 1-21 detect, 22-28 yolov26 pose, 29-35 yolov26 segment,
+36-42 resnet50 classify) with columns `NO PIPELINE TYPE RUNTIME
+PRECISION CALIB TASK QC BACKEND ARTIFACT`, ending with `[info] <N> pipelines; ...`. Show this table to
 the user **with the `NO` column first**. `NO` is the pipeline's short numeric ID, and the user picks
 pipelines by it in Step 2. The numbers are fixed in `regression/pipelines.yaml` and never change
 between runs.
@@ -128,19 +129,25 @@ For optional items, tell the user the default. Never fill in an answer yourself.
 1. **Pipelines** (required): "Which pipelines should I run? Give the pipeline numbers from the
    `NO` column (e.g. `3, 7, 15` or a range `1-7`), or `all`. Pipeline ids and glob patterns such as
    `yolov26-*` also work."
-2. **Modes** (optional, default `qc, mAP, test`): "Which modes should run for each pipeline?"
+2. **Modes** (optional, default `qc, eval, test`): "Which modes should run for each pipeline?"
 3. **Docker image** (required): "Which Docker image tag should be used (see `docker images`)?"
-4. **Input models** (required when `qc` or `mAP` is selected): "Give the absolute path of the `.pt`
+4. **Input models** (required when `qc` or `eval` is selected): "Give the absolute path of the `.pt`
    file for each model type you selected: yolov10 / yolov11 / yolov26." Ask only for the types present in
    the selected pipelines.
 5. **Calibration images** (required if any selected pipeline has `CALIB = yes` and `qc` is
    selected): "Absolute path of the calibration image directory?" Optional follow-up: "Max
    calibration images (default: product default 200)?"
-6. **mAP data** (required when `mAP` is selected): "Absolute path of the COCO annotations file
-   (e.g. `instances_val2017.json`) and of the mAP image directory?" Optional follow-up: "Max images for
-   mAP (default: product default 300)?"
+6. **eval data** (required when `eval` is selected): "Absolute path of the COCO annotations file
+   (e.g. `instances_val2017.json`) and of the eval image directory?" Optional follow-up: "Max images for
+   eval (default: product default 300)?"
 7. **Test data** (required when `test` is selected): "Absolute path of the test image **or** test
    image directory, and of the class-names yaml (e.g. `coco.yaml`)?"
+   **pose / segment / classify pipelines (22-42):** questions 4, 6 and 7 are asked again for each
+   selected task and go under `tasks.<task>` in `inputs.yaml` (see the template). They never reuse
+   the detect answers. Per task: the `.pt` (yolov26 pose / yolov26 segment / resnet50), eval data
+   (pose: COCO keypoints json or YOLO pose labels; segment: COCO instances json with segmentation or
+   YOLO segment labels; classify: no annotations, a class-names yaml and an eval folder with one
+   sub-folder per class) and test pictures plus yaml. Calibration images are shared.
 8. **QAI Hub login** (required when `qc` is selected): "How should QAI Hub be logged in?
    **(a)** reuse the existing login in `~/.qai_hub/client.ini`,
    **(b)** you log in yourself in your own terminal with a command I give you (recommended if you
@@ -148,8 +155,8 @@ For optional items, tell the user the default. Never fill in an answer yourself.
    **(c)** give me the token and I run the login once."
 9. **ADB device** (optional, default: the single attached device): "Which adb serial should be
    used? Leave empty if only one device is attached."
-10. **Extra flags** (optional, default none): "Any extra backend flags to add, per mode (qc / mAP /
-    test) or for a specific pipeline? For example `--conf 0.25` for mAP, or `--qc-head one2one` for qc."
+10. **Extra flags** (optional, default none): "Any extra backend flags to add, per mode (qc / eval /
+    test) or for a specific pipeline? For example `--conf 0.25` for eval, or `--qc-head one2one` for qc."
 11. **Prebuilt models** (optional, default none): "Do you want to skip qc for any pipeline by giving
     an already converted model (`.tflite` / `.onnx` / `.bin`)? If so, give the pipeline id and path."
 12. **Output directory** (optional, default `<repo_root>/out/regression/<timestamp>`): "Where
@@ -196,6 +203,7 @@ change nothing else. Mapping:
 | 5 | `calibration.dir`, `calibration.max_calib` |
 | 6 | `map.annotations`, `map.images`, `map.max_images` |
 | 7 | `test.image` **or** `test.images` (the other stays `null`), `test.yaml` |
+| 4/6/7 for pose, segment, classify | the matching `tasks.<task>` section (`model_pt`, `map`, `test`) |
 | 8 | `qai_hub.use_existing_login`: `true` for (a); `false` for (b) or (c). **Never** the token itself |
 | 9 | `device.adb_serial` |
 | 10 | `extra_flags.<mode>` lists, or `pipeline_extra_flags.<pipeline-id>.<mode>` |
@@ -208,7 +216,7 @@ Worked example (every path here is only an illustration; use the user's paths):
 repo_root: /home/user/iQ-Foundry
 docker_image: iq-foundry:local
 pipelines: [11, 16]      # 11 = yolov11-onnx-w8a16, 16 = yolov26-litert-fp32
-modes: [qc, mAP, test]
+modes: [qc, eval, test]
 models_pt:
   yolov10: null
   yolov11: /data/models/yolo11n.pt
@@ -231,7 +239,7 @@ qai_hub:
 prebuilt_models: {}
 extra_flags:
   qc: []
-  mAP: []
+  eval: []
   test: []
 pipeline_extra_flags: {}
 timeouts_s: {}
@@ -430,7 +438,7 @@ cat <run_dir>/report.md
 
 Show the report to the user **verbatim**. It contains:
 1. Run metadata: git branch/commit, image, device, duration.
-2. A **summary matrix**, `Pipeline | qc | mAP | test | Overall`.
+2. A **summary matrix**, `Pipeline | qc | eval | test | Overall`.
 3. **One table per pipeline**, `Mode | Status | Exit | Duration | Key result | Log`. The key result is
    the artifact and its size for qc, reference→converted mAP50 and Δ% for mAP, and the image count and average inference ms for test.
 4. A **Failures** section with the command, error line and log tail of each failed stage.
@@ -446,7 +454,7 @@ Files in the run directory, for the user:
 - `validation.json`: the validation results.
 - `run_state.json` and `runner.out`: the runner's phase and pid, and its console output when started with `start`.
 - `logs/<pipeline>/<mode>.log`: the full console output of each stage, starting with the exact command.
-- `artifacts/<pipeline>/qc|mAP|test/`: the converted models, mAP result text and test outputs.
+- `artifacts/<pipeline>/qc|eval|test/`: the converted models, eval result text and test outputs.
 
 If `report.md` is missing (for example after a crash), regenerate it:
 
@@ -460,7 +468,7 @@ python3 tool/test/regression/run_pipelines.py report --run-dir <run_dir>
 |---|---|
 | A stage is `FAIL` / `TIMEOUT` | Nothing during the run. Report it in Step 8. |
 | `status` says the runner is not running | Stop and show the output. Offer option C (the user runs it in their own terminal). Never relaunch it with `nohup`/`&`. |
-| `qc` failed, so `mAP`/`test` are `BLOCKED` | Expected. Report it. |
+| `qc` failed, so `eval`/`test` are `BLOCKED` | Expected. Report it. |
 | Validation says `NOT_FEASIBLE` | Ask the user to fix or drop it (Step 5). |
 | The user wants a different flag after a failure | That is a new run: new run directory (Step 3), then validate and plan again, and wait for `run` again. |
 | A command's output doesn't match this file | Stop and show it to the user (rule 7). |

@@ -21,7 +21,7 @@ Qualcomm AI Hub account and no device-side compilation.
 
 Nothing is pushed to the device. QLI2.0 already ships the QAIRT runtime
 (`qnn-net-run`, `qnn-profile-viewer`, `libQnnHtp.so`, the v73 stub and DSP skel), so
-`mAP` and `test` invoke the device's own binaries over adb.
+`eval` and `test` invoke the device's own binaries over adb.
 
 ## Environment
 

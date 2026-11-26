@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Shared ONNX Runtime inference helpers for test mode and mAP evaluation."""
+"""Shared ONNX Runtime inference helpers for test mode and eval mode."""
 
 from __future__ import annotations
 
@@ -29,15 +29,61 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+# Shared detection helpers live in tool/postprocess. Run from the repo they import as
+# tool.postprocess; pushed to the target as a standalone script they sit next to it.
+try:
+    from tool.postprocess.detect import (
+        IMG_H,
+        IMG_W,
+        _class_dim_for_anchor_count,
+        _extract_box_layout,
+        _normalize_output_layout,
+        _output_order_key,
+        _select_box_and_class_outputs,
+        _should_run_nms,
+        build_anchor_centers_8400,
+        clamp,
+        classwise_nms_xyxy,
+        dfl_to_xyxy_pixels,
+        letterbox_bgr,
+        ltrb_grid_to_xyxy_pixels,
+        sigmoid_clip,
+        sort_and_cap,
+    )
+    from tool.postprocess.outputs import load_raw_outputs, save_avg_invoke_ms, save_raw_outputs
+    from tool.postprocess.pose import postprocess_pose, save_pose_outputs
+    from tool.postprocess.segment import postprocess_segment, save_segment_outputs
+    from tool.postprocess.specs import MODEL_SPECS, TASK_SPECS
+except ModuleNotFoundError:
+    from postprocess.detect import (
+        IMG_H,
+        IMG_W,
+        _class_dim_for_anchor_count,
+        _extract_box_layout,
+        _normalize_output_layout,
+        _output_order_key,
+        _select_box_and_class_outputs,
+        _should_run_nms,
+        build_anchor_centers_8400,
+        clamp,
+        classwise_nms_xyxy,
+        dfl_to_xyxy_pixels,
+        letterbox_bgr,
+        ltrb_grid_to_xyxy_pixels,
+        sigmoid_clip,
+        sort_and_cap,
+    )
+    from postprocess.outputs import load_raw_outputs, save_avg_invoke_ms, save_raw_outputs
+    from postprocess.pose import postprocess_pose, save_pose_outputs
+    from postprocess.segment import postprocess_segment, save_segment_outputs
+    from postprocess.specs import MODEL_SPECS, TASK_SPECS
+
 cv2 = None
 np = None
 onnx = None
 ort = None
 yaml = None
 
-IMG_W = 640
-IMG_H = 640
-REG_MAX = 16
 SUPPORTED_IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp")
 IQ9_ARCH_ALIASES = {"aarch64", "arm64"}
 # Runtime change (ORT cp312 -> cp314): QLI2.0 ships Python 3.14, so the previous
@@ -48,11 +94,7 @@ DEFAULT_ORT_QNN_WHEEL = str(
     / "wheels"
     / "onnxruntime_qnn-1.25.1-cp314-cp314-linux_aarch64.whl"
 )
-EXPECTED_BOX_MODES = {
-    "yolov10": "dfl64",
-    "yolov11": "dfl64",
-    "yolov26": "ltrb4",
-}
+EXPECTED_BOX_MODES = {name: spec.box_mode for name, spec in MODEL_SPECS.items()}
 BOX_MODE_CHANNELS = {"dfl64": 64, "ltrb4": 4}
 DEFAULT_TFLITE_QNN_LIB = "/usr/lib/libQnnTFLiteDelegate.so"
 DEFAULT_ORT_QNN_BACKEND_PATH = "libQnnHtp.so"
@@ -78,6 +120,30 @@ class ORTModelMeta:
     class_count: int
     box_quant: QuantParams | None = None
     class_quant: QuantParams | None = None
+    task: str = "detect"
+    # Pose / segmentation outputs after boxes and scores, in TaskSpec.outputs order.
+    extra_output_names: tuple[str, ...] = ()
+    extra_quants: tuple[QuantParams, ...] = ()
+    # The model's input shape as the graph declares it (filled for classification, whose input
+    # size is read from the model instead of being fixed at 640).
+    input_shape: tuple[int, ...] = ()
+
+    @property
+    def output_names(self) -> list[str]:
+        """Graph output names, in the role order of the task (see TaskSpec.outputs)."""
+        if self.task == "classify":
+            return [self.box_output_name]  # the only output, the logits (kept in the box slot)
+        return [self.box_output_name, self.class_output_name, *self.extra_output_names]
+
+    def to_float(self, outputs: dict) -> dict:
+        """Pose / segmentation: all outputs as float (w8a16 outputs are dequantized)."""
+        if self.precision != "w8a16":
+            return {role: t.astype(np.float32, copy=False) for role, t in outputs.items()}
+        quants = (self.box_quant, self.class_quant, *self.extra_quants)
+        return {
+            role: _dequant_w8a16_output(outputs[role], quant)
+            for role, quant in zip(TASK_SPECS[self.task].outputs, quants)
+        }
 
 
 @dataclass
@@ -199,47 +265,6 @@ def _is_iq9_native_runtime() -> bool:
     return platform.machine().lower() in IQ9_ARCH_ALIASES
 
 
-def clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
-
-
-def sigmoid_clip(x):
-    _ensure_runtime_deps()
-    x = x.astype(np.float32, copy=False)
-    x = np.clip(x, -80.0, 80.0)
-    return 1.0 / (1.0 + np.exp(-x))
-
-
-def letterbox_bgr(
-    image_bgr,
-    new_shape: tuple[int, int] = (IMG_H, IMG_W),
-    color: tuple[int, int, int] = (114, 114, 114),
-):
-    _ensure_runtime_deps()
-    h0, w0 = image_bgr.shape[:2]
-    new_h, new_w = new_shape
-
-    ratio = min(new_h / h0, new_w / w0)
-    resized_w = int(round(w0 * ratio))
-    resized_h = int(round(h0 * ratio))
-
-    dw = (new_w - resized_w) / 2.0
-    dh = (new_h - resized_h) / 2.0
-    resized = cv2.resize(
-        image_bgr, (resized_w, resized_h), interpolation=cv2.INTER_LINEAR
-    )
-
-    top = int(round(dh - 0.1))
-    bottom = int(round(dh + 0.1))
-    left = int(round(dw - 0.1))
-    right = int(round(dw + 0.1))
-
-    padded = cv2.copyMakeBorder(
-        resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color
-    )
-    return padded, (float(ratio), float(dw), float(dh))
-
-
 def load_class_names(yaml_path: str) -> list[str]:
     _ensure_runtime_deps()
     if yaml is False:
@@ -328,217 +353,6 @@ def collect_image_files(img_dir: str) -> list[Path]:
     return files
 
 
-def build_anchor_centers_8400():
-    _ensure_runtime_deps()
-    centers = []
-    strides = []
-    for grid, stride in ((80, 8.0), (40, 16.0), (20, 32.0)):
-        ys, xs = np.meshgrid(
-            np.arange(grid, dtype=np.float32),
-            np.arange(grid, dtype=np.float32),
-            indexing="ij",
-        )
-        ax = (xs + 0.5) * stride
-        ay = (ys + 0.5) * stride
-        centers.append(np.stack([ax, ay], axis=-1).reshape(-1, 2))
-        strides.append(np.full((grid * grid,), stride, dtype=np.float32))
-    return np.concatenate(centers, axis=0), np.concatenate(strides, axis=0)
-
-
-def dfl_decode_to_ltrb_pixels(box64x_n, strides):
-    _ensure_runtime_deps()
-    num_anchors = box64x_n.shape[1]
-    reg = box64x_n.reshape(4, REG_MAX, num_anchors).astype(np.float32)
-    reg = reg - reg.max(axis=1, keepdims=True)
-    exp = np.exp(reg)
-    prob = exp / exp.sum(axis=1, keepdims=True)
-    proj = np.arange(REG_MAX, dtype=np.float32).reshape(1, REG_MAX, 1)
-    dist_bins = (prob * proj).sum(axis=1)
-    return dist_bins * strides.reshape(1, num_anchors)
-
-
-def dfl_to_xyxy_pixels(box64x_n, centers_xy, strides):
-    _ensure_runtime_deps()
-    ltrb = dfl_decode_to_ltrb_pixels(box64x_n, strides)
-    left, top, right, bottom = ltrb[0], ltrb[1], ltrb[2], ltrb[3]
-    ax, ay = centers_xy[:, 0], centers_xy[:, 1]
-    xyxy = np.stack([ax - left, ay - top, ax + right, ay + bottom], axis=1)
-    xyxy = xyxy.astype(np.float32)
-    xyxy[:, 0] = np.clip(xyxy[:, 0], 0.0, IMG_W)
-    xyxy[:, 1] = np.clip(xyxy[:, 1], 0.0, IMG_H)
-    xyxy[:, 2] = np.clip(xyxy[:, 2], 0.0, IMG_W)
-    xyxy[:, 3] = np.clip(xyxy[:, 3], 0.0, IMG_H)
-    return xyxy
-
-
-def ltrb_grid_to_xyxy_pixels(box4x_n, centers_xy, strides):
-    _ensure_runtime_deps()
-    box = np.maximum(box4x_n.astype(np.float32).T, 0.0)
-    left, top, right, bottom = box[:, 0], box[:, 1], box[:, 2], box[:, 3]
-    ax, ay = centers_xy[:, 0], centers_xy[:, 1]
-    xyxy = np.stack(
-        [
-            ax - left * strides,
-            ay - top * strides,
-            ax + right * strides,
-            ay + bottom * strides,
-        ],
-        axis=1,
-    ).astype(np.float32)
-    xyxy[:, 0] = np.clip(xyxy[:, 0], 0.0, IMG_W)
-    xyxy[:, 1] = np.clip(xyxy[:, 1], 0.0, IMG_H)
-    xyxy[:, 2] = np.clip(xyxy[:, 2], 0.0, IMG_W)
-    xyxy[:, 3] = np.clip(xyxy[:, 3], 0.0, IMG_H)
-    return xyxy
-
-
-def classwise_nms_xyxy(
-    xyxy,
-    scores,
-    class_ids,
-    conf_thres: float,
-    iou_thres: float,
-    max_det: int,
-) -> list[int]:
-    _ensure_runtime_deps()
-    kept: list[int] = []
-
-    for cid in np.unique(class_ids):
-        idx = np.where(class_ids == cid)[0]
-        if idx.size == 0:
-            continue
-        idx = idx[scores[idx] >= conf_thres]
-        if idx.size == 0:
-            continue
-
-        tlwh = []
-        cls_scores = scores[idx].tolist()
-        for x1, y1, x2, y2 in xyxy[idx].astype(np.float32):
-            tlwh.append([float(x1), float(y1), float(x2 - x1), float(y2 - y1)])
-
-        keep_local = cv2.dnn.NMSBoxes(tlwh, cls_scores, conf_thres, iou_thres)
-        if len(keep_local) == 0:
-            continue
-
-        if isinstance(keep_local, np.ndarray):
-            keep_local = keep_local.flatten().astype(int).tolist()
-        else:
-            keep_local = [int(i) for i in keep_local]
-        kept.extend(idx[keep_local].tolist())
-
-    kept = sorted(kept, key=lambda i: float(scores[i]), reverse=True)
-    if max_det > 0 and len(kept) > max_det:
-        kept = kept[:max_det]
-    return kept
-
-
-def sort_and_cap(scores, max_det: int) -> list[int]:
-    _ensure_runtime_deps()
-    keep = np.argsort(scores)[::-1].astype(int).tolist()
-    if max_det > 0 and len(keep) > max_det:
-        keep = keep[:max_det]
-    return keep
-
-
-def _extract_box_layout(shape: Sequence[int]) -> tuple[int, int] | None:
-    shp = tuple(int(x) for x in shape)
-    if len(shp) != 3 or shp[0] != 1:
-        return None
-    if shp[1] in (4, 64):
-        return int(shp[1]), int(shp[2])
-    if shp[2] in (4, 64):
-        return int(shp[2]), int(shp[1])
-    return None
-
-
-def _class_dim_for_anchor_count(shape: Sequence[int], anchor_count: int) -> int | None:
-    shp = tuple(int(x) for x in shape)
-    if len(shp) != 3 or shp[0] != 1:
-        return None
-    if int(shp[2]) == anchor_count:
-        return int(shp[1])
-    if int(shp[1]) == anchor_count:
-        return int(shp[2])
-    return None
-
-
-def _output_order_key(name: str | None, position: int) -> tuple[int, int]:
-    """Graph output order; converted models name their outputs output_0, output_1."""
-    if name and name.startswith("output_") and name[len("output_") :].isdigit():
-        return int(name[len("output_") :]), position
-    return position, position
-
-
-def _select_box_and_class_outputs(
-    outputs: Sequence[tuple[str | None, Sequence[int]]],
-    expected_box_channels: int | None = None,
-    anchor_count: int = 8400,
-) -> tuple[int, int] | None:
-    """Return (box_index, class_index) into `outputs`, or None.
-
-    A class tensor with 4 or 64 classes has the same shape as a box tensor, so
-    shape alone cannot tell them apart. Candidates are narrowed by the box
-    channel count expected for --type (when known), and any remaining tie is
-    broken by output order: every iQ-Foundry export returns (boxes, scores).
-    """
-    channels: dict[int, int] = {}
-    for idx, (_, shape) in enumerate(outputs):
-        shp = tuple(int(x) for x in shape)
-        if len(shp) != 3 or shp[0] != 1:
-            continue
-        if shp[2] == anchor_count:
-            channels[idx] = shp[1]
-        elif shp[1] == anchor_count:
-            channels[idx] = shp[2]
-    box_candidates = [idx for idx, ch in channels.items() if ch == expected_box_channels]
-    if not box_candidates:
-        # Unknown --type, or a model of another family: keep the shape rule so the
-        # caller's --type mismatch check can still report it clearly.
-        box_candidates = [idx for idx, ch in channels.items() if ch in (4, 64)]
-    if not box_candidates:
-        return None
-    order = {idx: _output_order_key(outputs[idx][0], idx) for idx in channels}
-    box_idx = min(box_candidates, key=order.__getitem__)
-    cls_candidates = [idx for idx in channels if idx != box_idx]
-    if not cls_candidates:
-        return None
-    return box_idx, min(cls_candidates, key=order.__getitem__)
-
-
-def _normalize_output_layout(
-    tensor,
-    *,
-    tensor_name: str,
-    channel_sizes: tuple[int, ...] | None = None,
-    anchor_count: int | None = None,
-):
-    _ensure_runtime_deps()
-    if tensor.ndim != 3 or int(tensor.shape[0]) != 1:
-        raise RuntimeError(
-            f"Unexpected {tensor_name} tensor rank/shape: "
-            f"{tuple(int(x) for x in tensor.shape)}"
-        )
-    if channel_sizes is not None:
-        if int(tensor.shape[1]) in channel_sizes:
-            return tensor
-        if int(tensor.shape[2]) in channel_sizes:
-            return np.transpose(tensor, (0, 2, 1))
-        raise RuntimeError(
-            f"Unexpected {tensor_name} tensor shape: "
-            f"{tuple(int(x) for x in tensor.shape)}"
-        )
-    if anchor_count is not None:
-        if int(tensor.shape[2]) == anchor_count:
-            return tensor
-        if int(tensor.shape[1]) == anchor_count:
-            return np.transpose(tensor, (0, 2, 1))
-        raise RuntimeError(
-            f"Unexpected {tensor_name} tensor shape: "
-            f"{tuple(int(x) for x in tensor.shape)}"
-        )
-    raise ValueError("Either channel_sizes or anchor_count must be provided.")
-
-
 def ort_type_to_numpy_dtype(ort_type: str):
     _ensure_runtime_deps()
     mapping = {
@@ -560,8 +374,13 @@ def ort_type_to_numpy_dtype(ort_type: str):
     return np.dtype(mapping[ort_type])
 
 
-def _resolve_input_layout(shape: Sequence[int]) -> str:
+def _resolve_input_layout(shape: Sequence[int], any_square_size: bool = False) -> str:
     dims = [int(v) for v in shape]
+    if any_square_size:  # classification: the input size is whatever the model was exported at
+        if len(dims) == 4 and dims[0] == 1 and dims[1] == 3 and dims[2] == dims[3]:
+            return "nchw"
+        if len(dims) == 4 and dims[0] == 1 and dims[3] == 3 and dims[1] == dims[2]:
+            return "nhwc"
     if dims == [1, 3, IMG_H, IMG_W]:
         return "nchw"
     if dims == [1, IMG_H, IMG_W, 3]:
@@ -750,6 +569,8 @@ def load_onnx_model_metadata(
     precision: str,
     box_quant: QuantParams | None = None,
     class_quant: QuantParams | None = None,
+    task: str = "detect",
+    extra_quants: Sequence[QuantParams] | None = None,
 ) -> ORTModelMeta:
     _ensure_runtime_deps()
     _ensure_ort()
@@ -757,17 +578,53 @@ def load_onnx_model_metadata(
     session = ort.InferenceSession(model, providers=["CPUExecutionProvider"])
     inputs = session.get_inputs()
     outputs = session.get_outputs()
+    roles = TASK_SPECS[task].outputs
 
     if len(inputs) != 1:
         raise RuntimeError(f"Expected exactly one ONNX model input, got {len(inputs)}")
-    if len(outputs) != 2:
+    if len(outputs) != len(roles):
         raise RuntimeError(
-            f"Expected exactly two raw ONNX outputs, got {len(outputs)}"
+            f"--task {task} expects {len(roles)} raw ONNX outputs ({', '.join(roles)}), "
+            f"got {len(outputs)}: {[tuple(o.shape) for o in outputs]}. "
+            "Check that --task and --model match."
         )
 
     input_meta = inputs[0]
-    input_layout = _resolve_input_layout(input_meta.shape)
+    input_layout = _resolve_input_layout(input_meta.shape, any_square_size=task == "classify")
     input_dtype = ort_type_to_numpy_dtype(input_meta.type)
+
+    if task == "classify":
+        # One output, the logits; it sits in the box fields (class_count = number of classes).
+        logits_quant = box_quant
+        if precision == "fp32":
+            if input_dtype not in (np.dtype(np.float32), np.dtype(np.float16)):
+                raise RuntimeError(
+                    f"Expected FP32/FP16 ONNX input tensor for precision={precision}, got {input_meta.type}"
+                )
+        elif precision == "w8a16":
+            if input_dtype != np.dtype(np.uint16):
+                raise RuntimeError(
+                    f"Expected uint16 ONNX input tensor for precision={precision}, got {input_meta.type}"
+                )
+            if logits_quant is None:
+                logits_quant = _load_w8a16_output_quant_params(model)[outputs[0].name]
+        else:
+            raise RuntimeError(f"Unsupported ONNX precision: {precision}")
+        return ORTModelMeta(
+            model_path=model,
+            model_type=model_type,
+            precision=precision,
+            input_name=input_meta.name,
+            input_layout=input_layout,
+            input_dtype=input_dtype,
+            box_output_name=outputs[0].name,
+            class_output_name="",
+            box_mode="",
+            class_count=int(outputs[0].shape[-1]),
+            box_quant=logits_quant,
+            task=task,
+            input_shape=tuple(int(v) for v in input_meta.shape),
+        )
 
     selected = _select_box_and_class_outputs(
         [(o.name, o.shape) for o in outputs],
@@ -782,9 +639,13 @@ def load_onnx_model_metadata(
     class_meta = outputs[selected[1]]
     box_mode = "dfl64" if _extract_box_layout(box_meta.shape)[0] == 64 else "ltrb4"
     class_count = int(_class_dim_for_anchor_count(class_meta.shape, anchor_count=8400))
+    rest = [(i, o) for i, o in enumerate(outputs) if i not in selected]
+    rest.sort(key=lambda item: _output_order_key(item[1].name, item[0]))
+    extra_names = tuple(o.name for _, o in rest)
 
     resolved_box_quant = box_quant
     resolved_class_quant = class_quant
+    resolved_extra_quants = tuple(extra_quants or ())
     if precision == "fp32":
         if input_dtype not in (np.dtype(np.float32), np.dtype(np.float16)):
             raise RuntimeError(
@@ -797,12 +658,18 @@ def load_onnx_model_metadata(
             )
         # ONNX ADB runners pass output quant metadata explicitly so the target does not
         # need to import the heavyweight `onnx` package just to inspect graph outputs.
-        if resolved_box_quant is None or resolved_class_quant is None:
+        if (
+            resolved_box_quant is None
+            or resolved_class_quant is None
+            or len(resolved_extra_quants) != len(extra_names)
+        ):
             output_quants = _load_w8a16_output_quant_params(model)
-            if box_meta.name not in output_quants or class_meta.name not in output_quants:
+            names = (box_meta.name, class_meta.name, *extra_names)
+            if any(name not in output_quants for name in names):
                 raise RuntimeError("Missing W8A16 output quantization parameters.")
             resolved_box_quant = output_quants[box_meta.name]
             resolved_class_quant = output_quants[class_meta.name]
+            resolved_extra_quants = tuple(output_quants[name] for name in extra_names)
     else:
         raise RuntimeError(f"Unsupported ONNX precision: {precision}")
 
@@ -819,9 +686,51 @@ def load_onnx_model_metadata(
         class_count=class_count,
         box_quant=resolved_box_quant,
         class_quant=resolved_class_quant,
+        task=task,
+        extra_output_names=extra_names,
+        extra_quants=resolved_extra_quants,
     )
     _validate_model_type_compatibility(meta, model_type)
     return meta
+
+
+def quant_cli_args(meta: ORTModelMeta) -> list[str]:
+    """--task and w8a16 output quant flags for the target-side runner (it has no `onnx`)."""
+    args = ["--task", meta.task] if meta.task != "detect" else []
+    if meta.precision != "w8a16":
+        return args
+    if meta.box_quant is None or (meta.task != "classify" and meta.class_quant is None):
+        raise RuntimeError("Missing W8A16 quantization metadata.")
+    args += [
+        "--box-scale", str(meta.box_quant.scale),
+        "--box-zero-point", str(meta.box_quant.zero_point),
+    ]
+    if meta.class_quant is not None:
+        args += [
+            "--class-scale", str(meta.class_quant.scale),
+            "--class-zero-point", str(meta.class_quant.zero_point),
+        ]
+    for quant in meta.extra_quants:
+        args += ["--extra-quant", str(quant.scale), str(quant.zero_point)]
+    return args
+
+
+def quant_params_from_args(args: argparse.Namespace):
+    """Inverse of quant_cli_args: (box_quant, class_quant, extra_quants) for the target runner."""
+    if args.precision != "w8a16":
+        return None, None, None
+    if args.task == "classify":  # the logits quant travels in the box fields
+        if None in (args.box_scale, args.box_zero_point):
+            raise RuntimeError(f"W8A16 {args.mode} mode requires explicit output quant metadata.")
+        return QuantParams(args.box_scale, args.box_zero_point), None, []
+    if None in (args.box_scale, args.box_zero_point, args.class_scale, args.class_zero_point):
+        raise RuntimeError(f"W8A16 {args.mode} mode requires explicit output quant metadata.")
+    extra = [QuantParams(float(s), int(float(z))) for s, z in (args.extra_quant or [])]
+    return (
+        QuantParams(args.box_scale, args.box_zero_point),
+        QuantParams(args.class_scale, args.class_zero_point),
+        extra,
+    )
 
 
 def _dequant_w8a16_output(tensor, quant: QuantParams):
@@ -903,14 +812,6 @@ def _resolve_effective_flow(requested_flow: str, default_flow: str) -> str:
     if requested_flow == "auto":
         return default_flow
     return requested_flow
-
-
-def _should_run_nms(flow: str, iou_thres: float, o2o_nms: bool) -> bool:
-    if flow in ("o2m", "default"):
-        return iou_thres > 0
-    if flow == "o2o":
-        return bool(o2o_nms and iou_thres > 0)
-    raise ValueError(f"Unsupported flow: {flow}")
 
 
 def postprocess_output(
@@ -1161,6 +1062,7 @@ def _run_test_directory(
     max_det: int,
     postprocess_flow: str,
     o2o_nms: bool,
+    task: str = "detect",
 ) -> None:
     _ensure_runtime_deps()
     class_names = load_class_names(yaml_path)
@@ -1187,37 +1089,71 @@ def _run_test_directory(
         invoke_time_s = 0.0
         for image_file in collect_image_files(image_dir):
             t0 = time.perf_counter()
-            box_tensor, class_tensor, ratio, pad_w, pad_h, orig_size = runner.infer_raw(
+            outputs, ratio, pad_w, pad_h, orig_size = runner.infer_raw(
                 str(image_file)
             )
             image_bgr = cv2.imread(str(image_file), cv2.IMREAD_COLOR)
             if image_bgr is None:
                 raise RuntimeError(f"Failed to read image: {image_file}")
 
-            xyxy, scores, class_ids, pre_nms = postprocess_output(
-                box_tensor,
-                class_tensor,
-                meta=runner.meta,
-                conf_thres=float(conf_thres),
-                iou_thres=float(iou_thres),
-                topk=int(topk),
-                max_det=int(max_det),
-                flow=flow,
-                o2o_nms=bool(o2o_nms),
-            )
-            written = _save_outputs(
-                output_dir=str(staging_output_dir),
-                image_name=image_file.name,
-                image_bgr=image_bgr,
-                ratio=ratio,
-                pad_w=pad_w,
-                pad_h=pad_h,
-                xyxy_640=xyxy,
-                scores=scores,
-                class_ids=class_ids,
-                classes=class_names,
-                class_colors=class_colors,
-            )
+            if task == "pose":
+                xyxy, scores, class_ids, kpts, pre_nms = postprocess_pose(
+                    outputs["boxes"],
+                    outputs["scores"],
+                    outputs["kpts"],
+                    conf_thres=float(conf_thres),
+                    iou_thres=float(iou_thres),
+                    topk=int(topk),
+                    max_det=int(max_det),
+                    flow=flow,
+                    o2o_nms=bool(o2o_nms),
+                )
+                written = save_pose_outputs(
+                    str(staging_output_dir), image_file.name, image_bgr,
+                    ratio, pad_w, pad_h, xyxy, scores, class_ids, kpts, class_names,
+                )
+            elif task == "segment":
+                xyxy, scores, class_ids, coefs, proto, pre_nms = postprocess_segment(
+                    outputs["boxes"],
+                    outputs["scores"],
+                    outputs["mask_coef"],
+                    outputs["proto"],
+                    conf_thres=float(conf_thres),
+                    iou_thres=float(iou_thres),
+                    topk=int(topk),
+                    max_det=int(max_det),
+                    flow=flow,
+                    o2o_nms=bool(o2o_nms),
+                )
+                written = save_segment_outputs(
+                    str(staging_output_dir), image_file.name, image_bgr,
+                    ratio, pad_w, pad_h, xyxy, scores, class_ids, coefs, proto, class_names,
+                )
+            else:
+                xyxy, scores, class_ids, pre_nms = postprocess_output(
+                    outputs["boxes"],
+                    outputs["scores"],
+                    meta=runner.meta,
+                    conf_thres=float(conf_thres),
+                    iou_thres=float(iou_thres),
+                    topk=int(topk),
+                    max_det=int(max_det),
+                    flow=flow,
+                    o2o_nms=bool(o2o_nms),
+                )
+                written = _save_outputs(
+                    output_dir=str(staging_output_dir),
+                    image_name=image_file.name,
+                    image_bgr=image_bgr,
+                    ratio=ratio,
+                    pad_w=pad_w,
+                    pad_h=pad_h,
+                    xyxy_640=xyxy,
+                    scores=scores,
+                    class_ids=class_ids,
+                    classes=class_names,
+                    class_colors=class_colors,
+                )
             t1 = time.perf_counter()
             processed += 1
             total_time_s, invoke_time_s = _accumulate_timing(
@@ -1251,6 +1187,8 @@ class ORTRawModel:
         no_qnn: bool = False,
         box_quant: QuantParams | None = None,
         class_quant: QuantParams | None = None,
+        task: str = "detect",
+        extra_quants: Sequence[QuantParams] | None = None,
     ):
         _warn_unused_onnx_backend_flag(backend)
         self.artifact = resolve_onnx_model_artifact(model_path)
@@ -1260,6 +1198,8 @@ class ORTRawModel:
             precision=precision,
             box_quant=box_quant,
             class_quant=class_quant,
+            task=task,
+            extra_quants=extra_quants,
         )
         self.session = create_ort_session(self.meta.model_path, qnn_lib, no_qnn)
         self.last_invoke_time_s = 0.0
@@ -1277,14 +1217,16 @@ class ORTRawModel:
             image_bgr, self.meta
         )
         t_invoke0 = time.perf_counter()
-        outputs = self.session.run(
-            [self.meta.box_output_name, self.meta.class_output_name],
+        results = self.session.run(
+            self.meta.output_names,
             {self.meta.input_name: input_tensor},
         )
         self.last_invoke_time_s = time.perf_counter() - t_invoke0
+        outputs = dict(zip(TASK_SPECS[self.meta.task].outputs, results))
+        if self.meta.task != "detect":
+            outputs = self.meta.to_float(outputs)
         return (
-            outputs[0],
-            outputs[1],
+            outputs,
             ratio,
             pad_w,
             pad_h,
@@ -1308,6 +1250,7 @@ class ADBORTRawModel:
         shared_remote_input_dir: str,
         shared_meta: dict,
         artifact: ResolvedONNXArtifact | None = None,
+        task: str = "detect",
     ):
         self.artifact = artifact or resolve_onnx_model_artifact(model_path)
         self.model_path = self.artifact.model_path
@@ -1325,6 +1268,7 @@ class ADBORTRawModel:
             model_path=self.model_path,
             model_type=model_type,
             precision=precision,
+            task=task,
         )
 
         self.remote_model = f"{self.remote_workdir}/{Path(self.model_path).name}"
@@ -1373,22 +1317,8 @@ class ADBORTRawModel:
             self.qnn_lib,
             "--backend",
             self.backend,
+            *quant_cli_args(self.meta),
         ]
-        if self.precision == "w8a16":
-            if self.meta.box_quant is None or self.meta.class_quant is None:
-                raise RuntimeError("Missing W8A16 quantization metadata.")
-            cmd.extend(
-                [
-                    "--box-scale",
-                    str(self.meta.box_quant.scale),
-                    "--box-zero-point",
-                    str(self.meta.box_quant.zero_point),
-                    "--class-scale",
-                    str(self.meta.class_quant.scale),
-                    "--class-zero-point",
-                    str(self.meta.class_quant.zero_point),
-                ]
-            )
         if self.no_qnn:
             cmd.append("--no-qnn")
         _adb_shell(
@@ -1408,20 +1338,14 @@ class ADBORTRawModel:
                 "prepare_batch(images) must be called before get_result_for_image(rec)"
             )
 
-        stem = str(rec.image_id)
-        boxes_path = self.local_output_dir / f"{stem}_boxes.npy"
-        scores_path = self.local_output_dir / f"{stem}_scores.npy"
-        if not boxes_path.exists():
-            raise FileNotFoundError(boxes_path)
-        if not scores_path.exists():
-            raise FileNotFoundError(scores_path)
-
-        boxes = np.load(boxes_path)
-        scores = np.load(scores_path)
+        outputs = load_raw_outputs(
+            self.local_output_dir, str(rec.image_id), TASK_SPECS[self.meta.task].outputs
+        )
+        if self.meta.task != "detect":
+            outputs = self.meta.to_float(outputs)
         meta = self.shared_meta[rec.image_id]
         return (
-            boxes,
-            scores,
+            outputs,
             meta["ratio"],
             meta["padw"],
             meta["padh"],
@@ -1442,11 +1366,12 @@ def prepare_shared_onnx_inputs(
     adb_serial: str | None,
     remote_input_dir: str,
     artifact: ResolvedONNXArtifact | None = None,
+    task: str = "detect",
 ):
     _ensure_runtime_deps()
     resolved_artifact = artifact or resolve_onnx_model_artifact(model_path)
     meta = load_onnx_model_metadata(
-        resolved_artifact.model_path, model_type, precision
+        resolved_artifact.model_path, model_type, precision, task=task
     )
     tmpdir_obj = tempfile.TemporaryDirectory()
     tmpdir = Path(tmpdir_obj.name)
@@ -1498,6 +1423,7 @@ def run_onnx_test_inference_local(
     backend: str = "htp",
     runtime: str = "onnx",
     precision: str = "fp32",
+    task: str = "detect",
 ) -> None:
     if runtime != "onnx":
         raise RuntimeError(f"Unsupported runtime for ONNX helpers: {runtime}")
@@ -1518,6 +1444,7 @@ def run_onnx_test_inference_local(
             qnn_lib=qnn_lib,
             backend=backend,
             no_qnn=no_qnn,
+            task=task,
         )
         _validate_class_name_count(runner.meta, yaml_path)
         _run_test_directory(
@@ -1532,6 +1459,7 @@ def run_onnx_test_inference_local(
             max_det=max_det,
             postprocess_flow=postprocess_flow,
             o2o_nms=o2o_nms,
+            task=task,
         )
     finally:
         if runner is not None:
@@ -1562,6 +1490,7 @@ def run_onnx_test_inference_adb(
     backend: str = "htp",
     runtime: str = "onnx",
     precision: str = "fp32",
+    task: str = "detect",
 ) -> None:
     _ensure_runtime_deps()
     if runtime != "onnx":
@@ -1571,10 +1500,13 @@ def run_onnx_test_inference_adb(
             "[warn] --disable-int8-prefilter is not used by the ONNX Runtime path and will be ignored."
         )
 
-    from tool.adb_runtime_bootstrap import ensure_adb_runtime_venv
+    from tool.adb_runtime_bootstrap import (
+        ensure_adb_runtime_venv,
+        push_postprocess_package,
+    )
 
     artifact = resolve_onnx_model_artifact(model_path)
-    meta = load_onnx_model_metadata(artifact.model_path, model_type, precision)
+    meta = load_onnx_model_metadata(artifact.model_path, model_type, precision, task=task)
     _validate_class_name_count(meta, yaml_path)
     prepared_dir, tmp_obj = _prepare_image_input(
         image_dir=image_dir, image_path=image_path
@@ -1620,6 +1552,7 @@ def run_onnx_test_inference_adb(
             )
         _adb_push(adb_serial, local_yaml, remote_yaml)
         _adb_push(adb_serial, local_script, remote_script)
+        push_postprocess_package(adb_serial, remote_run_dir)
         for image in collect_image_files(prepared_dir):
             _adb_push(adb_serial, str(image), f"{remote_img_dir}/{image.name}")
 
@@ -1656,22 +1589,8 @@ def run_onnx_test_inference_adb(
             qnn_lib,
             "--backend",
             backend,
+            *quant_cli_args(meta),
         ]
-        if precision == "w8a16":
-            if meta.box_quant is None or meta.class_quant is None:
-                raise RuntimeError("Missing W8A16 quantization metadata.")
-            remote_cmd.extend(
-                [
-                    "--box-scale",
-                    str(meta.box_quant.scale),
-                    "--box-zero-point",
-                    str(meta.box_quant.zero_point),
-                    "--class-scale",
-                    str(meta.class_quant.scale),
-                    "--class-zero-point",
-                    str(meta.class_quant.zero_point),
-                ]
-            )
         if o2o_nms:
             remote_cmd.append("--o2o-nms")
         if no_qnn:
@@ -1700,19 +1619,7 @@ def run_onnx_test_inference_adb(
 
 def _run_batch_raw_mode(args: argparse.Namespace) -> None:
     _ensure_runtime_deps()
-    box_quant = None
-    class_quant = None
-    if args.precision == "w8a16":
-        if (
-            args.box_scale is None
-            or args.box_zero_point is None
-            or args.class_scale is None
-            or args.class_zero_point is None
-        ):
-            raise RuntimeError("W8A16 batch mode requires explicit output quant metadata.")
-        box_quant = QuantParams(args.box_scale, args.box_zero_point)
-        class_quant = QuantParams(args.class_scale, args.class_zero_point)
-
+    box_quant, class_quant, extra_quants = quant_params_from_args(args)
     runner = ORTRawModel(
         model_path=args.model,
         model_type=args.model_type,
@@ -1722,38 +1629,35 @@ def _run_batch_raw_mode(args: argparse.Namespace) -> None:
         no_qnn=args.no_qnn,
         box_quant=box_quant,
         class_quant=class_quant,
+        task=args.task,
+        extra_quants=extra_quants,
     )
     try:
         input_dir = Path(args.input_dir).expanduser().resolve()
         output_dir = Path(args.output_dir).expanduser().resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        invoke_seconds = []
         for input_file in sorted(input_dir.glob("*.npy")):
             tensor = np.load(input_file)
-            outputs = runner.session.run(
-                [runner.meta.box_output_name, runner.meta.class_output_name],
+            t0 = time.perf_counter()
+            results = runner.session.run(
+                runner.meta.output_names,
                 {runner.meta.input_name: tensor},
             )
-            stem = input_file.stem
-            np.save(output_dir / f"{stem}_boxes.npy", outputs[0])
-            np.save(output_dir / f"{stem}_scores.npy", outputs[1])
+            invoke_seconds.append(time.perf_counter() - t0)
+            save_raw_outputs(
+                output_dir,
+                input_file.stem,
+                dict(zip(TASK_SPECS[runner.meta.task].outputs, results)),
+            )
+        save_avg_invoke_ms(output_dir, invoke_seconds)
     finally:
         runner.cleanup()
 
 
 def _run_test_mode_cli(args: argparse.Namespace) -> None:
-    box_quant = None
-    class_quant = None
-    if args.precision == "w8a16":
-        if (
-            args.box_scale is None
-            or args.box_zero_point is None
-            or args.class_scale is None
-            or args.class_zero_point is None
-        ):
-            raise RuntimeError("W8A16 test mode requires explicit output quant metadata.")
-        box_quant = QuantParams(args.box_scale, args.box_zero_point)
-        class_quant = QuantParams(args.class_scale, args.class_zero_point)
+    box_quant, class_quant, extra_quants = quant_params_from_args(args)
     runner = ORTRawModel(
         model_path=args.model,
         model_type=args.model_type,
@@ -1763,6 +1667,8 @@ def _run_test_mode_cli(args: argparse.Namespace) -> None:
         no_qnn=args.no_qnn,
         box_quant=box_quant,
         class_quant=class_quant,
+        task=args.task,
+        extra_quants=extra_quants,
     )
     try:
         _validate_class_name_count(runner.meta, args.yaml)
@@ -1778,6 +1684,7 @@ def _run_test_mode_cli(args: argparse.Namespace) -> None:
             max_det=args.max_det,
             postprocess_flow=args.postprocess_flow,
             o2o_nms=args.o2o_nms,
+            task=args.task,
         )
     finally:
         runner.cleanup()
@@ -1811,6 +1718,11 @@ def main() -> None:
     parser.add_argument("--box-zero-point", type=int, default=None)
     parser.add_argument("--class-scale", type=float, default=None)
     parser.add_argument("--class-zero-point", type=int, default=None)
+    parser.add_argument(
+        "--task", choices=["detect", "pose", "segment", "classify"], default="detect"
+    )
+    # w8a16 pose / segmentation: scale and zero point of each output after boxes and scores.
+    parser.add_argument("--extra-quant", nargs=2, action="append", metavar=("SCALE", "ZP"))
     args = parser.parse_args()
 
     if args.mode == "test":
