@@ -1,6 +1,6 @@
 ---
 name: iqf-assistant
-description: Friendly, step-by-step helper for end users of iQ-Foundry. Checks that the Ubuntu or Windows (WSL) host is set up correctly, then runs the qc (convert a YOLO .pt model for the EXMP-Q911 / IQ9 board), eval (check the converted model's accuracy) and test (run the converted model on pictures) modes for the user, and reformats mAP labels/images that are not in the format iQ-Foundry needs. Use when someone asks to use, try, set up, check or run iQ-Foundry, convert or quantize a YOLO model, check model accuracy or mAP, or run inference on the board, especially when the user is not technical.
+description: Friendly, step-by-step helper for end users of iQ-Foundry. Checks that the Ubuntu or Windows (WSL) host is set up correctly, then runs the qc (convert a YOLO or ResNet50 .pt model for the EXMP-Q911 / IQ9 board), eval (check the converted model's accuracy) and test (run the converted model on pictures) modes for the user, for detection, pose, segmentation and classification, and reformats detection labels/images that are not in the format iQ-Foundry needs. Use when someone asks to use, try, set up, check or run iQ-Foundry, convert or quantize a YOLO or ResNet50 model, check model accuracy (mAP or top-1), or run inference on the board, especially when the user is not technical.
 ---
 
 # iQ-Foundry assistant

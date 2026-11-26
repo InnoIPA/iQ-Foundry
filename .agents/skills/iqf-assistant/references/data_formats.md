@@ -58,7 +58,8 @@ The result file contains `reference_map50`, `converted_map50`,
 - **classify:** no annotations. `--images` is a folder with one sub-folder per class, named exactly
   as in the class-names yaml (`--yaml`, required). The result file has `reference_top1`,
   `converted_top1`, `reference_top5`, `converted_top5` and `top1_agreement`. `--conf`, `--nms`,
-  `--max-det`, `--fp-head` and `--topk` are not allowed.
+  `--max-det`, `--fp-head` and `--topk` are not allowed. `--max-images N` takes pictures from every
+  class folder in turn, so a small N still covers all classes.
 - **`prepare_map_data.py` makes detection labels only.** For pose, segment and classify the user's
   data must already be in the formats above: the tool would turn segment polygons into boxes and
   drop keypoints, so do not run it for these tasks.

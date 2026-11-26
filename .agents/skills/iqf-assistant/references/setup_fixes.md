@@ -72,6 +72,8 @@ check again.
   - Ubuntu: log out of the desktop, or reboot.
   - WSL: close every Ubuntu window, run `wsl --shutdown` in PowerShell, then open Ubuntu again.
   - Then start the agent again.
+  - Quicker, without logging out: in a terminal run `newgrp docker`, then start the agent from
+    that same terminal. Only that terminal gets the group, so use it for this session.
 - **MISSING, "not in the docker group":** run `bash ./docker_install.sh` (it adds the user to the
   group), then log out and back in as above.
 
