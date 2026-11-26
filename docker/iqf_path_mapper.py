@@ -409,11 +409,20 @@ def _persisted_kind(mode: str, field_name: str) -> str:
     return MODE_PATH_SPECS[mode][field_name].kind
 
 
+def _is_required_input(mode: str, field_name: str, task: str) -> bool:
+    # Classification eval has no annotation file (the class is the image folder's name) and needs
+    # the class-name YAML instead, because the model file does not carry its class names.
+    if mode == "eval" and task == "classify" and field_name in ("annotations", "yaml"):
+        return field_name == "yaml"
+    return MODE_PATH_SPECS[mode][field_name].required_input
+
+
 def merge_required_input_paths(
     mode: str,
     model_type: str,
     provided_paths: dict[str, str | None],
     saved_paths: dict[str, str],
+    task: str = DEFAULT_TASK,
 ) -> dict[str, str]:
     merged: dict[str, str] = {}
 
@@ -449,8 +458,8 @@ def merge_required_input_paths(
                 merged[field_name] = value
         return merged
 
-    for field_name, spec in MODE_PATH_SPECS[mode].items():
-        if not spec.required_input:
+    for field_name in MODE_PATH_SPECS[mode]:
+        if not _is_required_input(mode, field_name, task):
             continue
         value = provided_paths.get(field_name) or saved_paths.get(field_name)
         if value:
@@ -483,10 +492,7 @@ def missing_required_paths(
             and not qc_requires_calibration(runtime, precision)
         ):
             continue
-        # Classification has no annotation file: the class is the image folder's name.
-        if mode == "eval" and task == "classify" and field_name == "annotations":
-            continue
-        if spec.required_input and not merged_inputs.get(field_name):
+        if _is_required_input(mode, field_name, task) and not merged_inputs.get(field_name):
             missing.append(spec.flag)
     return missing
 
@@ -688,6 +694,13 @@ def prompt_for_mode_paths(
         return saved_inputs
 
     prompt_fields = prompts[mode]
+    if mode == "eval" and task == "classify":
+        prompt_fields = tuple(
+            ("yaml", "Enter class YAML path for eval (--yaml)")
+            if field_name == "annotations"
+            else (field_name, prompt)
+            for field_name, prompt in prompt_fields
+        )
     if mode == "qc" and qc_requires_calibration(runtime, precision):
         prompt_fields = prompt_fields + (
             ("calib_dir", "Enter calibration image directory for qc (--calib_dir)"),
@@ -965,7 +978,9 @@ def plan_run_command(
         precision,
         task=task,
     )
-    merged_inputs = merge_required_input_paths(mode, model_type, provided_paths, saved_paths)
+    merged_inputs = merge_required_input_paths(
+        mode, model_type, provided_paths, saved_paths, task
+    )
     missing_flags = missing_required_paths(
         mode, merged_inputs, runtime, precision, task
     )
@@ -988,7 +1003,8 @@ def plan_run_command(
     output_display_map: dict[str, str] = {}
 
     for field_name, spec in MODE_PATH_SPECS[mode].items():
-        if spec.required_input:
+        required = _is_required_input(mode, field_name, task)
+        if required:
             raw_value = merged_inputs.get(field_name)
         else:
             raw_value = provided_paths.get(field_name)
@@ -1002,7 +1018,7 @@ def plan_run_command(
         translated, mount = _translate_path(mode, field_name, normalized, spec.kind)
         translated_paths[field_name] = translated
         mounts.append(mount)
-        if spec.required_input:
+        if required:
             saved_inputs[field_name] = (spec.kind, normalized)
         if spec.kind.startswith("output_"):
             output_display_map[translated] = normalized
