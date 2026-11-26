@@ -127,7 +127,7 @@ After these steps, the Windows host is ready for `qc`, `eval`, and host-side `te
 
 `iQ-Foundry` supports two ways to run each mode:
 
-- [Configure Flow](#configure-flow): simple, repeatable wrapper commands for each mode. Save the required host paths in `.iqf/docker-paths.json`, then run the mode with shorter commands. For a guided walkthrough of the repeated-flow experience, see the [iQ-Studio YOLO26 tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/detect/README.md).
+- [Configure Flow](#configure-flow-commands): simple, repeatable wrapper commands for each mode. Save the required host paths in `.iqf/docker-paths.json`, then run the mode with shorter commands. For a guided walkthrough of the repeated-flow experience, see the [iQ-Studio YOLO26 tutorial](https://github.com/InnoIPA/iQ-Studio/blob/main/tutorials/model-deploy/cv/detect/README.md).
 - [One-Shot Commands](#one-shot-commands): full wrapper usage with more explicit control. Pass the required host paths and any extra flags directly in the command.
 
 Use `Configure Flow` when you want an easier repeated workflow. Use `One-Shot Commands` when you
