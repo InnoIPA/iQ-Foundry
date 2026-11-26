@@ -6,7 +6,7 @@ and reports how much the accuracy score changed between the two. The score depen
 accuracy for classification (see [Tasks](#tasks)). Use this mode to validate whether the converted
 model preserves the expected quality before moving to broader testing or deployment.
 
-![eval mode overview](Images/map-mode-overview.png)
+![eval mode overview](Images/eval-mode-overview.png)
 
 > [!TIP]
 > **🤖 Using a coding agent?** If you use Claude Code, Codex or any other coding agent, you can run
@@ -241,6 +241,11 @@ The current `eval` pipeline works as follows:
 6. Run reference inference on the host and converted-model inference on EXMP-Q911 (Qualcomm QCS9075) with the same evaluation images.
 7. Postprocess both outputs with the same settings and evaluate them with `mAP@0.5`.
 8. Write a summary report with reference `mAP`, converted `mAP`, and the resulting deltas.
+
+These steps describe detection. Pose and segmentation follow the same steps but score keypoints
+(OKS) or masks instead of boxes. Classification has no annotations or output head: it takes each
+image's class from its folder name and the class names from `--yaml`, and reports top-1 / top-5
+accuracy instead of `mAP@0.5`. See [Tasks](#tasks).
 
 ## Custom Annotation Auto-Detection
 
